@@ -27,13 +27,7 @@ typedef enum {
     PREC_PRIMARY,
 } Precedence;
 
-typedef struct {
-    const char *start;
-    size_t length;
-    int is_primitive;
-    size_t *array_lengths;
-    size_t array_dimension_count;
-} ParsedType;
+typedef ASTType ParsedType;
 
 static ASTNode *parse_precedence(Parser *parser, Precedence precedence);
 static ASTNode *parse_unary(Parser *parser);
@@ -49,59 +43,58 @@ static ASTNode *parse_return_stmt(Parser *parser);
 static ASTNode *parse_repeat_stmt(Parser *parser);
 static ASTNode *parse_for_stmt(Parser *parser);
 static ASTNode *parse_assignment_expr(Parser *parser);
-static int looks_like_user_type_array_decl(Parser *parser);
+static int looks_like_user_type_array_decl(Parser *parser);
 static void advance(Parser *parser);
 static void parser_error(Parser *parser, const char *message);
 static int is_lvalue(const ASTNode *node);
-static int is_type_token(TokenKind kind);
-static int parse_type(Parser *parser, ParsedType *type);
 static ASTNode *parse_function_decl(Parser *parser);
 static ASTNode *parse_struct_decl(Parser *parser);
 static ASTNode *parse_enum_decl(Parser *parser);
 static ASTNode *parse_import_stmt(Parser *parser);
 static ASTNode *ast_new_null(size_t line, size_t column);
-
-static int is_type_token(TokenKind kind)
-{
-    return kind == TOKEN_NUMBER ||
-           kind == TOKEN_DECIMAL ||
-           kind == TOKEN_BOOL ||
-           kind == TOKEN_CHAR ||
-           kind == TOKEN_STRING ||
-           kind == TOKEN_IDENTIFIER ||
-           kind == TOKEN_VOID;
-}
-
 static int parse_type(Parser *parser, ParsedType *type)
 {
-    if (!is_type_token(parser->current.kind)) {
-        parser_error(parser, "expected type");
-        return 0;
+    memset(type, 0, sizeof(*type));
+
+    switch (parser->current.kind) {
+        case TOKEN_NUMBER:
+            type->kind = AST_TYPE_NUMBER;
+            break;
+        case TOKEN_DECIMAL:
+            type->kind = AST_TYPE_DECIMAL;
+            break;
+        case TOKEN_BOOL:
+            type->kind = AST_TYPE_BOOL;
+            break;
+        case TOKEN_CHAR:
+            type->kind = AST_TYPE_CHAR;
+            break;
+        case TOKEN_STRING:
+            type->kind = AST_TYPE_STRING;
+            break;
+        case TOKEN_VOID:
+            type->kind = AST_TYPE_VOID;
+            break;
+        case TOKEN_IDENTIFIER:
+            type->kind = AST_TYPE_USER;
+            type->name = parser->current.start;
+            type->name_length = parser->current.length;
+            break;
+        default:
+            parser_error(parser, "expected type");
+            return 0;
     }
 
-    type->start = parser->current.start;
-    type->length = parser->current.length;
-
-    type->is_primitive =
-        parser->current.kind == TOKEN_NUMBER ||
-        parser->current.kind == TOKEN_DECIMAL ||
-        parser->current.kind == TOKEN_BOOL ||
-        parser->current.kind == TOKEN_CHAR ||
-        parser->current.kind == TOKEN_STRING;
-
-    type->array_lengths = NULL;
-    type->array_dimension_count = 0;
-
     advance(parser);
-
-    while (parser->current.kind == TOKEN_LBRACKET) {
+
+    while (parser->current.kind == TOKEN_LBRACKET) {
         advance(parser);
 
         if (parser->current.kind != TOKEN_NUMBER_LITERAL) {
             parser_error(parser, "expected array size");
-            free(type->array_lengths);
-            type->array_lengths = NULL;
-            type->array_dimension_count = 0;
+            free(type->dimensions);
+            type->dimensions = NULL;
+            type->dimension_count = 0;
             return 0;
         }
 
@@ -109,54 +102,51 @@ static int parse_type(Parser *parser, ParsedType *type)
 
         if (parser->current.length >= sizeof(buffer)) {
             parser_error(parser, "array size is too large");
-            free(type->array_lengths);
-            type->array_lengths = NULL;
-            type->array_dimension_count = 0;
+            free(type->dimensions);
+            type->dimensions = NULL;
+            type->dimension_count = 0;
             return 0;
         }
 
-        memcpy(
-            buffer,
-            parser->current.start,
-            parser->current.length
-        );
+        memcpy(buffer, parser->current.start, parser->current.length);
         buffer[parser->current.length] = '\0';
 
         char *end = NULL;
-        unsigned long long size = strtoull(buffer, &end, 10);
+        unsigned long long size = strtoull(buffer, &end, 10);
 
-        if (end == buffer || *end != '\0' || size > SIZE_MAX) {
+        if (end == buffer || *end != '\0' || size > SIZE_MAX) {
             parser_error(parser, "invalid array size");
-            free(type->array_lengths);
-            type->array_lengths = NULL;
-            type->array_dimension_count = 0;
-            return 0;
-        }
-
-        size_t *new_lengths = realloc(
-            type->array_lengths,
-            (type->array_dimension_count + 1) * sizeof(size_t)
-        );
-
-        if (new_lengths == NULL) {
-            parser_error(parser, "out of memory");
-            free(type->array_lengths);
-            type->array_lengths = NULL;
-            type->array_dimension_count = 0;
+            free(type->dimensions);
+            type->dimensions = NULL;
+            type->dimension_count = 0;
             return 0;
         }
 
-        type->array_lengths = new_lengths;
-        type->array_lengths[type->array_dimension_count] = (size_t)size;
-        type->array_dimension_count++;
+        ASTArrayDimension *new_dimensions = realloc(
+            type->dimensions,
+            (type->dimension_count + 1) * sizeof(ASTArrayDimension)
+        );
+
+        if (new_dimensions == NULL) {
+            parser_error(parser, "out of memory");
+            free(type->dimensions);
+            type->dimensions = NULL;
+            type->dimension_count = 0;
+            return 0;
+        }
+
+        type->dimensions = new_dimensions;
+        type->dimensions[type->dimension_count].has_size = 1;
+        type->dimensions[type->dimension_count].size = (size_t)size;
+        type->dimension_count++;
 
         advance(parser);
 
         if (parser->current.kind != TOKEN_RBRACKET) {
             parser_error(parser, "expected ']' after array size");
-            free(type->array_lengths);
-            type->array_lengths = NULL;
-            type->array_dimension_count = 0;
+            free(type->dimensions);
+            type->dimensions = NULL;
+            type->dimension_count = 0;
             return 0;
         }
 
@@ -751,7 +741,7 @@ static ASTNode *parse_var_decl(Parser *parser)
 
     if (name_token.kind != TOKEN_IDENTIFIER) {
         parser_error(parser, "expected variable name");
-        free(type.array_lengths);
+        free(type.dimensions);
         return NULL;
     }
 
@@ -763,20 +753,26 @@ static ASTNode *parse_var_decl(Parser *parser)
         initializer = parser_parse_expression(parser);
 
         if (initializer == NULL) {
-            free(type.array_lengths);
+            free(type.dimensions);
             return NULL;
         }
     }
 
-    if (initializer == NULL && type.is_primitive && type.array_dimension_count==0) {
+    if (initializer == NULL &&
+        (type.kind == AST_TYPE_NUMBER ||
+         type.kind == AST_TYPE_DECIMAL ||
+         type.kind == AST_TYPE_BOOL ||
+         type.kind == AST_TYPE_CHAR ||
+         type.kind == AST_TYPE_STRING) &&
+        type.dimension_count == 0) {
         parser_error(parser, "primitive variable requires an initializer");
-        free(type.array_lengths);
+        free(type.dimensions);
         return NULL;
     }
 
     if (parser->current.kind != TOKEN_SEMICOLON) {
         ast_free(initializer);
-        free(type.array_lengths);
+        free(type.dimensions);
         parser_error(parser, "expected ';' after variable declaration");
         return NULL;
     }
@@ -787,10 +783,7 @@ static ASTNode *parse_var_decl(Parser *parser)
         is_const,
         name_token.start,
         name_token.length,
-        type.start,
-        type.length,
-        type.array_lengths,
-        type.array_dimension_count,
+        type,
         initializer,
         name_token.line,
         name_token.column
@@ -1429,6 +1422,7 @@ static ASTNode *parse_function_decl(Parser *parser)
     /* Then parse function name. */
     if (parser->current.kind != TOKEN_IDENTIFIER) {
         parser_error(parser, "expected function name");
+        free(return_type.dimensions);
         return NULL;
     }
 
@@ -1437,6 +1431,7 @@ static ASTNode *parse_function_decl(Parser *parser)
 
     if (parser->current.kind != TOKEN_LPAREN) {
         parser_error(parser, "expected '(' after function name");
+        free(return_type.dimensions);
         return NULL;
     }
 
@@ -1455,7 +1450,7 @@ static ASTNode *parse_function_decl(Parser *parser)
 
             if (parser->current.kind != TOKEN_IDENTIFIER) {
                 parser_error(parser, "expected parameter name");
-                free(parameter_type.array_lengths);
+                free(parameter_type.dimensions);
                 goto fail;
             }
 
@@ -1466,17 +1461,14 @@ static ASTNode *parse_function_decl(Parser *parser)
                 0,
                 parameter_name.start,
                 parameter_name.length,
-                parameter_type.start,
-                parameter_type.length,
-                parameter_type.array_lengths,
-                parameter_type.array_dimension_count,
+                parameter_type,
                 NULL,
                 parameter_name.line,
                 parameter_name.column
             );
 
             if (parameter == NULL) {
-                free(parameter_type.array_lengths);
+                free(parameter_type.dimensions);
                 parser_error(parser, "out of memory");
                 goto fail;
             }
@@ -1522,17 +1514,14 @@ static ASTNode *parse_function_decl(Parser *parser)
     }
 
     return ast_new_function(
-    name_token.start,
-    name_token.length,
-    parameters,
-    parameter_count,
-    return_type.start,
-    return_type.length,
-    return_type.array_lengths,
-    return_type.array_dimension_count,
-    body,
-    function_token.line,
-    function_token.column
+    name_token.start,
+    name_token.length,
+    parameters,
+    parameter_count,
+    return_type,
+    body,
+    function_token.line,
+    function_token.column
     );
 
 fail:
@@ -1544,8 +1533,8 @@ fail:
         free(parameters);
     }
 
-    free(return_type.array_lengths);
-
+    free(return_type.dimensions);
+
     return NULL;
 }
 
@@ -1583,6 +1572,7 @@ static ASTNode *parse_struct_decl(Parser *parser)
 
         if (parser->current.kind != TOKEN_IDENTIFIER) {
             parser_error(parser, "expected field name");
+            free(field_type.dimensions);
             goto fail;
         }
 
@@ -1591,6 +1581,7 @@ static ASTNode *parse_struct_decl(Parser *parser)
 
         if (parser->current.kind != TOKEN_SEMICOLON) {
             parser_error(parser, "expected ';' after struct field");
+            free(field_type.dimensions);
             goto fail;
         }
 
@@ -1600,16 +1591,14 @@ static ASTNode *parse_struct_decl(Parser *parser)
             0,
             field_name.start,
             field_name.length,
-            field_type.start,
-            field_type.length,
-            field_type.array_lengths,
-            field_type.array_dimension_count,
+            field_type,
             NULL,
             field_name.line,
             field_name.column
         );
 
         if (field == NULL) {
+            free(field_type.dimensions);
             parser_error(parser, "out of memory");
             goto fail;
         }
@@ -1795,38 +1784,38 @@ static ASTNode *ast_new_null(size_t line, size_t column)
     node->column = column;
 
     return node;
-}
-static int looks_like_user_type_array_decl(Parser *parser)
-{
-    if (parser->current.kind != TOKEN_IDENTIFIER ||
-        parser->next.kind != TOKEN_LBRACKET) {
-        return 0;
-    }
-
-    Lexer lexer = parser->lexer;
-
-    /*
-     * parser->next is already the first '['.
-     * The copied lexer is positioned after parser->next,
-     * so start validation from parser->next manually.
-     */
-    Token token = parser->next;
-
-    while (token.kind == TOKEN_LBRACKET) {
-        token = lexer_next_token(&lexer);
-
-        if (token.kind != TOKEN_NUMBER_LITERAL) {
-            return 0;
-        }
-
-        token = lexer_next_token(&lexer);
-
-        if (token.kind != TOKEN_RBRACKET) {
-            return 0;
-        }
-
-        token = lexer_next_token(&lexer);
-    }
-
-    return token.kind == TOKEN_IDENTIFIER;
-}
+}
+static int looks_like_user_type_array_decl(Parser *parser)
+{
+    if (parser->current.kind != TOKEN_IDENTIFIER ||
+        parser->next.kind != TOKEN_LBRACKET) {
+        return 0;
+    }
+
+    Lexer lexer = parser->lexer;
+
+    /*
+     * parser->next is already the first '['.
+     * The copied lexer is positioned after parser->next,
+     * so start validation from parser->next manually.
+     */
+    Token token = parser->next;
+
+    while (token.kind == TOKEN_LBRACKET) {
+        token = lexer_next_token(&lexer);
+
+        if (token.kind != TOKEN_NUMBER_LITERAL) {
+            return 0;
+        }
+
+        token = lexer_next_token(&lexer);
+
+        if (token.kind != TOKEN_RBRACKET) {
+            return 0;
+        }
+
+        token = lexer_next_token(&lexer);
+    }
+
+    return token.kind == TOKEN_IDENTIFIER;
+}

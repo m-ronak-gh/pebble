@@ -163,11 +163,11 @@ void ast_free(ASTNode *node)
 
         case AST_FUNCTION:
             for (size_t i = 0; i < node->data.function_decl.parameter_count; i++) {
-                free(node->data.function_decl.return_array_lengths);
                 ast_free(node->data.function_decl.parameters[i]);
             }
 
             free(node->data.function_decl.parameters);
+            free(node->data.function_decl.return_type.dimensions);
             ast_free(node->data.function_decl.body);
             break;
 
@@ -250,7 +250,7 @@ void ast_free(ASTNode *node)
             break;
 
         case AST_VAR_DECL:
-            free(node->data.var_decl.array_lengths);
+            free(node->data.var_decl.type.dimensions);
             ast_free(node->data.var_decl.initializer);
             break;
 
@@ -353,6 +353,38 @@ static const char *binary_operator_name(ASTBinaryOperator operator)
     return "UNKNOWN";
 }
 
+static const char *ast_type_kind_name(ASTTypeKind kind)
+{
+    switch (kind) {
+        case AST_TYPE_NUMBER: return "number";
+        case AST_TYPE_DECIMAL: return "decimal";
+        case AST_TYPE_BOOL: return "bool";
+        case AST_TYPE_CHAR: return "char";
+        case AST_TYPE_STRING: return "string";
+        case AST_TYPE_VOID: return "void";
+        case AST_TYPE_USER: return NULL;
+    }
+
+    return NULL;
+}
+
+static void ast_print_type(const ASTType *type)
+{
+    if (type->kind == AST_TYPE_USER) {
+        printf("%.*s", (int)type->name_length, type->name);
+    } else {
+        printf("%s", ast_type_kind_name(type->kind));
+    }
+
+    for (size_t i = 0; i < type->dimension_count; i++) {
+        if (type->dimensions[i].has_size) {
+            printf("[%zu]", type->dimensions[i].size);
+        } else {
+            printf("[]");
+        }
+    }
+}
+
 void ast_print(const ASTNode *node, int indent)
 {
     if (node == NULL) {
@@ -415,16 +447,8 @@ void ast_print(const ASTNode *node, int indent)
             }
 
             print_indent(indent + 1);
-            printf("RETURN_TYPE %.*s",
-                (int)node->data.function_decl.return_type_length,
-                node->data.function_decl.return_type);
-
-            for (size_t i = 0;
-                i < node->data.function_decl.return_array_dimension_count;
-                i++) {
-                printf("[%zu]", node->data.function_decl.return_array_lengths[i]);
-            }
-
+            printf("RETURN_TYPE ");
+            ast_print_type(&node->data.function_decl.return_type);
             printf("\n");
 
             print_indent(indent + 1);
@@ -635,13 +659,8 @@ void ast_print(const ASTNode *node, int indent)
             break;
 
         case AST_VAR_DECL:
-            printf("VAR_DECL %.*s",
-                (int)node->data.var_decl.type_length,
-                node->data.var_decl.type);
-
-            for (size_t i = 0; i < node->data.var_decl.array_dimension_count; i++) {
-                printf("[%zu]", node->data.var_decl.array_lengths[i]);
-            }
+            printf("VAR_DECL ");
+            ast_print_type(&node->data.var_decl.type);
 
             printf(" %.*s%s\n",
                 (int)node->data.var_decl.name_length,
@@ -728,10 +747,7 @@ ASTNode *ast_new_var_decl(
     int is_const,
     const char *name,
     size_t name_length,
-    const char *type,
-    size_t type_length,
-    size_t *array_lengths,
-    size_t array_dimension_count,
+    ASTType type,
     ASTNode *initializer,
     size_t line,
     size_t column)
@@ -746,10 +762,7 @@ ASTNode *ast_new_var_decl(
     node->data.var_decl.name = name;
     node->data.var_decl.name_length = name_length;
     node->data.var_decl.type = type;
-    node->data.var_decl.type_length = type_length;
     node->data.var_decl.initializer = initializer;
-    node->data.var_decl.array_lengths = array_lengths;
-    node->data.var_decl.array_dimension_count = array_dimension_count;
 
     return node;
 }
@@ -930,10 +943,7 @@ ASTNode *ast_new_function(
     size_t name_length,
     ASTNode **parameters,
     size_t parameter_count,
-    const char *return_type,
-    size_t return_type_length,
-    size_t *return_array_lengths,
-    size_t return_array_dimension_count,
+    ASTType return_type,
     ASTNode *body,
     size_t line,
     size_t column
@@ -954,9 +964,6 @@ ASTNode *ast_new_function(
     node->data.function_decl.parameters = parameters;
     node->data.function_decl.parameter_count = parameter_count;
     node->data.function_decl.return_type = return_type;
-    node->data.function_decl.return_type_length = return_type_length;
-    node->data.function_decl.return_array_lengths = return_array_lengths;
-    node->data.function_decl.return_array_dimension_count = return_array_dimension_count;
     node->data.function_decl.body = body;
 
     return node;
@@ -1026,4 +1033,4 @@ ASTNode *ast_new_enum(
     node->data.enum_decl.member_count = member_count;
 
     return node;
-}
+}

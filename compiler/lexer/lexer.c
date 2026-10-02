@@ -1,5 +1,44 @@
 #include "lexer.h"
+
 #include <string.h>
+
+typedef struct {
+    const char *spelling;
+    TokenKind kind;
+} Keyword;
+
+static const Keyword keywords[] = {
+    { "import",   TOKEN_IMPORT },
+    { "function", TOKEN_FUNCTION },
+    { "struct",   TOKEN_STRUCT },
+    { "enum",     TOKEN_ENUM },
+    { "const",    TOKEN_CONST },
+
+    { "number",   TOKEN_NUMBER },
+    { "decimal",  TOKEN_DECIMAL },
+    { "bool",     TOKEN_BOOL },
+    { "char",     TOKEN_CHAR },
+    { "string",   TOKEN_STRING },
+    { "void",     TOKEN_VOID },
+
+    { "if",       TOKEN_IF },
+    { "else",     TOKEN_ELSE },
+    { "while",    TOKEN_WHILE },
+    { "repeat",   TOKEN_REPEAT },
+    { "for",      TOKEN_FOR },
+
+    { "break",    TOKEN_BREAK },
+    { "continue", TOKEN_CONTINUE },
+    { "return",   TOKEN_RETURN },
+
+    { "true",     TOKEN_TRUE },
+    { "false",    TOKEN_FALSE },
+    { "null",     TOKEN_NULL },
+    { "print",    TOKEN_PRINT }
+};
+
+static const size_t keyword_count =
+    sizeof(keywords) / sizeof(keywords[0]);
 
 static TokenKind identifier_type(const Lexer *lexer);
 static Token number(Lexer *lexer);
@@ -51,10 +90,14 @@ static Token make_token(const Lexer *lexer, TokenKind kind)
     return token;
 }
 
-static Token make_error_token(const Lexer *lexer, const char *message)
+static Token make_error_token(
+    const Lexer *lexer,
+    const char *message
+)
 {
     Token token = make_token(lexer, TOKEN_ERROR);
     token.error_message = message;
+
     return token;
 }
 
@@ -125,13 +168,14 @@ Token lexer_next_token(Lexer *lexer)
     }
 
     char c = advance(lexer);
+
     if (c == '"') {
         return string_literal(lexer);
     }
 
     if (c == '\'') {
         return char_literal(lexer);
-    }    
+    }
 
     if (c >= '0' && c <= '9') {
         return number(lexer);
@@ -165,40 +209,15 @@ static TokenKind identifier_type(const Lexer *lexer)
     size_t length = lexer->current - lexer->start;
     const char *text = lexer->source + lexer->start;
 
-#define KEYWORD(word, token) \
-    if (length == sizeof(word) - 1 && \
-        strncmp(text, word, sizeof(word) - 1) == 0) \
-        return token;
+    for (size_t i = 0; i < keyword_count; i++) {
+        const Keyword *keyword = &keywords[i];
+        size_t keyword_length = strlen(keyword->spelling);
 
-    KEYWORD("import", TOKEN_IMPORT)
-    KEYWORD("function", TOKEN_FUNCTION)
-    KEYWORD("struct", TOKEN_STRUCT)
-    KEYWORD("enum", TOKEN_ENUM)
-    KEYWORD("const", TOKEN_CONST)
-
-    KEYWORD("number", TOKEN_NUMBER)
-    KEYWORD("decimal", TOKEN_DECIMAL)
-    KEYWORD("bool", TOKEN_BOOL)
-    KEYWORD("char", TOKEN_CHAR)
-    KEYWORD("string", TOKEN_STRING)
-    KEYWORD("void", TOKEN_VOID)
-
-    KEYWORD("if", TOKEN_IF)
-    KEYWORD("else", TOKEN_ELSE)
-    KEYWORD("while", TOKEN_WHILE)
-    KEYWORD("repeat", TOKEN_REPEAT)
-    KEYWORD("for", TOKEN_FOR)
-
-    KEYWORD("break", TOKEN_BREAK)
-    KEYWORD("continue", TOKEN_CONTINUE)
-    KEYWORD("return", TOKEN_RETURN)
-
-    KEYWORD("true", TOKEN_TRUE)
-    KEYWORD("false", TOKEN_FALSE)
-    KEYWORD("null", TOKEN_NULL)
-    KEYWORD("print", TOKEN_PRINT)
-
-#undef KEYWORD
+        if (length == keyword_length &&
+            memcmp(text, keyword->spelling, length) == 0) {
+            return keyword->kind;
+        }
+    }
 
     return TOKEN_IDENTIFIER;
 }
@@ -243,14 +262,20 @@ static Token string_literal(Lexer *lexer)
 static Token char_literal(Lexer *lexer)
 {
     if (is_at_end(lexer) || peek(lexer) == '\n') {
-        return make_error_token(lexer, "unterminated character literal");
+        return make_error_token(
+            lexer,
+            "unterminated character literal"
+        );
     }
 
     if (peek(lexer) == '\\') {
         advance(lexer);
 
         if (is_at_end(lexer)) {
-            return make_error_token(lexer, "unterminated character literal");
+            return make_error_token(
+                lexer,
+                "unterminated character literal"
+            );
         }
 
         advance(lexer);
@@ -278,10 +303,14 @@ static int match(Lexer *lexer, char expected)
     }
 
     advance(lexer);
+
     return 1;
 }
 
-static Token operator_or_punctuation(Lexer *lexer, char c)
+static Token operator_or_punctuation(
+    Lexer *lexer,
+    char c
+)
 {
     switch (c) {
         case '+':
@@ -302,39 +331,61 @@ static Token operator_or_punctuation(Lexer *lexer, char c)
         case '=':
             return make_token(
                 lexer,
-                match(lexer, '=') ? TOKEN_EQUAL_EQUAL : TOKEN_EQUAL
+                match(lexer, '=') ?
+                    TOKEN_EQUAL_EQUAL :
+                    TOKEN_EQUAL
             );
 
         case '!':
             return make_token(
                 lexer,
-                match(lexer, '=') ? TOKEN_BANG_EQUAL : TOKEN_BANG
+                match(lexer, '=') ?
+                    TOKEN_BANG_EQUAL :
+                    TOKEN_BANG
             );
 
         case '&':
-            if (match(lexer, '&')) return make_token(lexer, TOKEN_AND_AND);
+            if (match(lexer, '&')) {
+                return make_token(lexer, TOKEN_AND_AND);
+            }
+
             return make_token(lexer, TOKEN_AMPERSAND);
 
         case '^':
             return make_token(lexer, TOKEN_CARET);
 
         case '|':
-            if (match(lexer, '|')) return make_token(lexer, TOKEN_OR_OR);
+            if (match(lexer, '|')) {
+                return make_token(lexer, TOKEN_OR_OR);
+            }
+
             return make_token(lexer, TOKEN_PIPE);
 
         case '<':
-            if (match(lexer, '=')) return make_token(lexer, TOKEN_LESS_EQUAL);
-            if (match(lexer, '<')) return make_token(lexer, TOKEN_SHIFT_LEFT);
+            if (match(lexer, '=')) {
+                return make_token(lexer, TOKEN_LESS_EQUAL);
+            }
+
+            if (match(lexer, '<')) {
+                return make_token(lexer, TOKEN_SHIFT_LEFT);
+            }
+
             return make_token(lexer, TOKEN_LESS);
 
         case '>':
-            if (match(lexer, '=')) return make_token(lexer, TOKEN_GREATER_EQUAL);
-            if (match(lexer, '>')) return make_token(lexer, TOKEN_SHIFT_RIGHT);
+            if (match(lexer, '=')) {
+                return make_token(lexer, TOKEN_GREATER_EQUAL);
+            }
+
+            if (match(lexer, '>')) {
+                return make_token(lexer, TOKEN_SHIFT_RIGHT);
+            }
+
             return make_token(lexer, TOKEN_GREATER);
-        
+
         case '~':
             return make_token(lexer, TOKEN_TILDE);
-        
+
         case '(':
             return make_token(lexer, TOKEN_LPAREN);
 

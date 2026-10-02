@@ -81,8 +81,84 @@ static const char *token_name(TokenKind kind)
 
     return "UNKNOWN";
 }
+
+static void test_all_keywords(void)
+{
+    const char *source =
+        "import "
+        "function "
+        "struct "
+        "enum "
+        "const "
+        "number "
+        "decimal "
+        "bool "
+        "char "
+        "string "
+        "void "
+        "if "
+        "else "
+        "while "
+        "repeat "
+        "for "
+        "break "
+        "continue "
+        "return "
+        "true "
+        "false "
+        "null "
+        "print";
+
+    const TokenKind expected[] = {
+        TOKEN_IMPORT,
+        TOKEN_FUNCTION,
+        TOKEN_STRUCT,
+        TOKEN_ENUM,
+        TOKEN_CONST,
+
+        TOKEN_NUMBER,
+        TOKEN_DECIMAL,
+        TOKEN_BOOL,
+        TOKEN_CHAR,
+        TOKEN_STRING,
+        TOKEN_VOID,
+
+        TOKEN_IF,
+        TOKEN_ELSE,
+        TOKEN_WHILE,
+        TOKEN_REPEAT,
+        TOKEN_FOR,
+
+        TOKEN_BREAK,
+        TOKEN_CONTINUE,
+        TOKEN_RETURN,
+
+        TOKEN_TRUE,
+        TOKEN_FALSE,
+        TOKEN_NULL,
+        TOKEN_PRINT
+    };
+
+    const size_t expected_count =
+        sizeof(expected) / sizeof(expected[0]);
+
+    Lexer lexer;
+    lexer_init(&lexer, source);
+
+    for (size_t i = 0; i < expected_count; i++) {
+        Token token = lexer_next_token(&lexer);
+
+        assert(token.kind == expected[i]);
+        assert(token.length > 0);
+    }
+
+    Token token = lexer_next_token(&lexer);
+    assert(token.kind == TOKEN_EOF);
+}
+
 int main(void)
 {
+    test_all_keywords();
     const char *source =
         "import \"io\";\n"
         "\n"
