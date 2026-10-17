@@ -15,6 +15,11 @@ typedef struct CodegenVariable {
     struct CodegenVariable *next;
 } CodegenVariable;
 
+typedef struct CodegenLoop {
+    LLVMBasicBlockRef break_target;
+    LLVMBasicBlockRef continue_target;
+    struct CodegenLoop *parent;
+} CodegenLoop;
 typedef struct {
     LLVMContextRef context;
     LLVMModuleRef module;
@@ -24,6 +29,7 @@ typedef struct {
 
     LLVMValueRef current_function;
     CodegenVariable *variables;
+    CodegenLoop *current_loop;
 } Codegen;
 
 Codegen *codegen_create(

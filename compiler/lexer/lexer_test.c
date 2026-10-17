@@ -77,6 +77,8 @@ static const char *token_name(TokenKind kind)
         case TOKEN_COMMA: return "COMMA";
         case TOKEN_SEMICOLON: return "SEMICOLON";
         case TOKEN_DOT: return "DOT";
+        case TOKEN_TILDE: return "TILDE";
+        case TOKEN_NULL: return "NULL";
     }
 
     return "UNKNOWN";

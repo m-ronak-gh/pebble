@@ -11,6 +11,21 @@ static void codegen_variable_declaration(
     ASTNode *node
 );
 
+static void codegen_if(
+    Codegen *codegen,
+    ASTNode *statement
+);
+
+static void codegen_assignment(
+    Codegen *codegen,
+    ASTNode *node
+);
+
+static void codegen_while(
+    Codegen *codegen,
+    ASTNode *node
+);
+
 static void codegen_return(
     Codegen *codegen,
     ASTNode *node
@@ -25,6 +40,9 @@ static void codegen_print(
     Codegen *codegen,
     ASTNode *node
 );
+
+static void codegen_break(Codegen *codegen);
+static void codegen_continue(Codegen *codegen);
 
 static LLVMTypeRef llvm_type_from_semantic(
     Codegen *codegen,
@@ -95,6 +113,7 @@ Codegen *codegen_create(
     codegen->semantic = semantic;
     codegen->current_function = NULL;
     codegen->variables = NULL;
+    codegen->current_loop = NULL;
 
     return codegen;
 }
@@ -610,6 +629,93 @@ LLVMValueRef codegen_expression(
                         right,
                         "modtmp"
                     );
+                case AST_BINARY_EQUAL:
+                case AST_BINARY_NOT_EQUAL:
+                case AST_BINARY_LESS:
+                case AST_BINARY_LESS_EQUAL:
+                case AST_BINARY_GREATER:
+                case AST_BINARY_GREATER_EQUAL: {
+                    int is_decimal =
+                        left_type.kind == SEM_TYPE_DECIMAL;
+
+                    LLVMRealPredicate real_predicate;
+
+                    switch (
+                        expression->data.binary.operator
+                    ) {
+                        case AST_BINARY_EQUAL:
+                            real_predicate = LLVMRealOEQ;
+                            break;
+
+                        case AST_BINARY_NOT_EQUAL:
+                            real_predicate = LLVMRealUNE;
+                            break;
+
+                        case AST_BINARY_LESS:
+                            real_predicate = LLVMRealOLT;
+                            break;
+
+                        case AST_BINARY_LESS_EQUAL:
+                            real_predicate = LLVMRealOLE;
+                            break;
+
+                        case AST_BINARY_GREATER:
+                            real_predicate = LLVMRealOGT;
+                            break;
+
+                        default:
+                            real_predicate = LLVMRealOGE;
+                            break;
+                    }
+
+                    if (is_decimal) {
+                        return LLVMBuildFCmp(
+                            codegen->builder,
+                            real_predicate,
+                            left,
+                            right,
+                            "fcmp"
+                        );
+                    }
+
+                    LLVMIntPredicate int_predicate;
+
+                    switch (
+                        expression->data.binary.operator
+                    ) {
+                        case AST_BINARY_EQUAL:
+                            int_predicate = LLVMIntEQ;
+                            break;
+
+                        case AST_BINARY_NOT_EQUAL:
+                            int_predicate = LLVMIntNE;
+                            break;
+
+                        case AST_BINARY_LESS:
+                            int_predicate = LLVMIntSLT;
+                            break;
+
+                        case AST_BINARY_LESS_EQUAL:
+                            int_predicate = LLVMIntSLE;
+                            break;
+
+                        case AST_BINARY_GREATER:
+                            int_predicate = LLVMIntSGT;
+                            break;
+
+                        default:
+                            int_predicate = LLVMIntSGE;
+                            break;
+                    }
+
+                    return LLVMBuildICmp(
+                        codegen->builder,
+                        int_predicate,
+                        left,
+                        right,
+                        "icmp"
+                    );
+                }
 
                 default:
                     fprintf(
@@ -763,6 +869,63 @@ static void codegen_variable_declaration(
     variable->next = codegen->variables;
 
     codegen->variables = variable;
+}
+
+static void codegen_assignment(
+    Codegen *codegen,
+    ASTNode *node
+)
+{
+    ASTNode *target = node->data.assignment.target;
+    ASTNode *value_node = node->data.assignment.value;
+
+    if (target == NULL || target->kind != AST_IDENTIFIER) {
+        fprintf(
+            stderr,
+            "codegen: only identifier assignments are supported currently\n"
+        );
+        return;
+    }
+
+    CodegenVariable *variable = codegen_find_variable(
+        codegen,
+        target->data.identifier.start,
+        target->data.identifier.length
+    );
+
+    if (variable == NULL) {
+        fprintf(
+            stderr,
+            "codegen: unknown variable in assignment '%.*s'\n",
+            (int)target->data.identifier.length,
+            target->data.identifier.start
+        );
+        return;
+    }
+
+    LLVMValueRef value = codegen_expression(codegen, value_node);
+
+    if (value == NULL) {
+        return;
+    }
+
+    LLVMTypeRef expected_type = llvm_type_from_semantic(
+        codegen,
+        variable->type
+    );
+
+    if (expected_type == NULL ||
+        LLVMTypeOf(value) != expected_type) {
+        fprintf(
+            stderr,
+            "codegen: assignment type mismatch for '%.*s'\n",
+            (int)target->data.identifier.length,
+            target->data.identifier.start
+        );
+        return;
+    }
+
+    LLVMBuildStore(codegen->builder, value, variable->alloca);
 }
 
 // printf
@@ -953,6 +1116,10 @@ static void codegen_statement(
             );
             break;
 
+        case AST_ASSIGNMENT:
+            codegen_assignment(codegen, statement);
+            break;
+
         case AST_PRINT:
             codegen_print(
                 codegen,
@@ -965,6 +1132,36 @@ static void codegen_statement(
                 codegen,
                 statement
             );
+            break;
+
+        case AST_BREAK:
+            codegen_break(codegen);
+            break;
+
+        case AST_CONTINUE:
+            codegen_continue(codegen);
+            break;
+
+        case AST_BLOCK:
+            codegen_block(codegen, statement);
+            break;
+
+        case AST_EXPR_STMT:
+            (void)codegen_expression(
+                codegen,
+                statement->data.expr_stmt.expression
+            );
+            break;
+
+        case AST_IF:
+            codegen_if(
+                codegen,
+                statement
+            );
+            break;
+        
+        case AST_WHILE:
+            codegen_while(codegen, statement);
             break;
 
         default:
@@ -1002,6 +1199,14 @@ static void codegen_block(
 
         if (statement == NULL) {
             continue;
+        }
+        
+        LLVMBasicBlockRef current_block =
+            LLVMGetInsertBlock(codegen->builder);
+
+        if (current_block != NULL &&
+            LLVMGetBasicBlockTerminator(current_block) != NULL) {
+            break;
         }
 
         codegen_statement(
@@ -1112,5 +1317,275 @@ void codegen_function(
     codegen_block(
         codegen,
         function->data.function_decl.body
+    );
+}
+
+static void codegen_if(
+    Codegen *codegen,
+    ASTNode *statement
+)
+{
+    LLVMValueRef condition =
+        codegen_expression(
+            codegen,
+            statement->data.if_stmt.condition
+        );
+
+    if (condition == NULL ||
+        codegen->current_function == NULL) {
+        fprintf(stderr, "codegen: failed to generate if condition\n");
+        return;
+    }
+
+    LLVMBasicBlockRef then_block =
+        LLVMAppendBasicBlockInContext(
+            codegen->context,
+            codegen->current_function,
+            "if.then"
+        );
+
+    LLVMBasicBlockRef merge_block =
+        LLVMAppendBasicBlockInContext(
+            codegen->context,
+            codegen->current_function,
+            "if.end"
+        );
+
+    ASTNode *else_statement =
+        statement->data.if_stmt.else_branch;
+
+    LLVMBasicBlockRef else_block =
+        else_statement != NULL
+            ? LLVMAppendBasicBlockInContext(
+                  codegen->context,
+                  codegen->current_function,
+                  "if.else"
+              )
+            : merge_block;
+
+    LLVMBuildCondBr(
+        codegen->builder,
+        condition,
+        then_block,
+        else_block
+    );
+
+    LLVMPositionBuilderAtEnd(
+        codegen->builder,
+        then_block
+    );
+
+    codegen_statement(
+        codegen,
+        statement->data.if_stmt.then_branch
+    );
+
+    LLVMBasicBlockRef then_end =
+        LLVMGetInsertBlock(codegen->builder);
+
+    int then_terminated =
+        LLVMGetBasicBlockTerminator(then_end) != NULL;
+
+    if (!then_terminated) {
+        LLVMBuildBr(
+            codegen->builder,
+            merge_block
+        );
+    }
+
+    int else_terminated = 0;
+
+    if (else_statement != NULL) {
+        LLVMPositionBuilderAtEnd(
+            codegen->builder,
+            else_block
+        );
+
+        codegen_statement(
+            codegen,
+            else_statement
+        );
+
+        LLVMBasicBlockRef else_end =
+            LLVMGetInsertBlock(codegen->builder);
+
+        else_terminated =
+            LLVMGetBasicBlockTerminator(else_end) != NULL;
+
+        if (!else_terminated) {
+            LLVMBuildBr(
+                codegen->builder,
+                merge_block
+            );
+        }
+    }
+
+    /*
+     * With an else branch, if both sides terminate, the merge has
+     * no incoming path. Terminate it explicitly to keep IR valid.
+     */
+    if (else_statement != NULL &&
+        then_terminated &&
+        else_terminated) {
+
+        LLVMPositionBuilderAtEnd(
+            codegen->builder,
+            merge_block
+        );
+
+        LLVMBuildUnreachable(
+            codegen->builder
+        );
+
+        return;
+    }
+
+    LLVMPositionBuilderAtEnd(
+        codegen->builder,
+        merge_block
+    );
+}
+
+static void codegen_while(
+    Codegen *codegen,
+    ASTNode *node
+)
+{
+    if (node == NULL ||
+        node->kind != AST_WHILE ||
+        codegen->current_function == NULL) {
+        return;
+    }
+
+    LLVMBasicBlockRef condition_block =
+        LLVMAppendBasicBlockInContext(
+            codegen->context,
+            codegen->current_function,
+            "while.cond"
+        );
+
+    LLVMBasicBlockRef body_block =
+        LLVMAppendBasicBlockInContext(
+            codegen->context,
+            codegen->current_function,
+            "while.body"
+        );
+
+    LLVMBasicBlockRef exit_block =
+        LLVMAppendBasicBlockInContext(
+            codegen->context,
+            codegen->current_function,
+            "while.end"
+        );
+
+    CodegenLoop loop = {
+        .break_target = exit_block,
+        .continue_target = condition_block,
+        .parent = codegen->current_loop
+    };
+
+    codegen->current_loop = &loop;
+
+    LLVMBuildBr(
+        codegen->builder,
+        condition_block
+    );
+
+    LLVMPositionBuilderAtEnd(
+        codegen->builder,
+        condition_block
+    );
+
+    LLVMValueRef condition =
+        codegen_expression(
+            codegen,
+            node->data.while_stmt.condition
+        );
+
+    if (condition == NULL ||
+        LLVMTypeOf(condition) !=
+            LLVMInt1TypeInContext(codegen->context)) {
+
+        fprintf(
+            stderr,
+            "codegen: while condition must be bool\n"
+        );
+
+        LLVMBuildBr(
+            codegen->builder,
+            exit_block
+        );
+
+        LLVMPositionBuilderAtEnd(
+            codegen->builder,
+            exit_block
+        );
+
+        return;
+    }
+
+    LLVMBuildCondBr(
+        codegen->builder,
+        condition,
+        body_block,
+        exit_block
+    );
+
+    LLVMPositionBuilderAtEnd(
+        codegen->builder,
+        body_block
+    );
+
+    codegen_statement(
+        codegen,
+        node->data.while_stmt.body
+    );
+
+    LLVMBasicBlockRef body_end =
+        LLVMGetInsertBlock(codegen->builder);
+
+    if (LLVMGetBasicBlockTerminator(body_end) == NULL) {
+        LLVMBuildBr(
+            codegen->builder,
+            condition_block
+        );
+    }
+
+    LLVMPositionBuilderAtEnd(
+        codegen->builder,
+        exit_block
+    );
+    
+    codegen->current_loop = loop.parent;
+    return;
+}
+
+static void codegen_break(Codegen *codegen)
+{
+    if (codegen == NULL ||
+        codegen->current_loop == NULL) {
+        fprintf(stderr,
+                "codegen: break used outside a loop\n");
+        return;
+    }
+
+    LLVMBuildBr(
+        codegen->builder,
+        codegen->current_loop->break_target
+    );
+}
+
+static void codegen_continue(Codegen *codegen)
+{
+    if (codegen == NULL ||
+        codegen->current_loop == NULL) {
+        fprintf(stderr,
+                "codegen: continue used outside a loop\n");
+        return;
+    }
+
+    LLVMBuildBr(
+        codegen->builder,
+        codegen->current_loop->continue_target
     );
 }

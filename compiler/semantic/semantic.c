@@ -1641,8 +1641,10 @@ static TypeInfo *analyze_expr(
                     array->name,
                     array->name_length
                 );
+                
+            TypeInfo *element = array->element_type;
 
-            if (!type) {
+            if (element == NULL) {
                 semantic_error(
                     a->ctx,
                     node,
@@ -1651,8 +1653,6 @@ static TypeInfo *analyze_expr(
 
                 return error_type(a->ctx, node);
             }
-
-            TypeInfo *element = array->element_type;
 
             if (array->array_dimension_count > 1) {
                 type =
