@@ -8,17 +8,22 @@ int main(void)
 {
     const char *source =
         "function number main() {"
-            "number i 0;"
-            "while (i < 3) {"
-                "i = i + 1;"
-                "if (i == 2) {"
-                    "break;"
-                "} else {"
-                    "continue;"
+            "number total 0;"
+
+            "for (number i 0; i < 3; i = i + 1) {"
+                "repeat (3) {"
+                    "if (i == 1) {"
+                        "break;"
+                    "}"
+                    "if (i == 0) {"
+                        "continue;"
+                    "}"
+                    "total = total + 1;"
                 "}"
-                "print(999);"
+                "total = total + 10;"
             "}"
-            "return 42;"
+
+            "return total;"
         "}";
 
     Parser parser;

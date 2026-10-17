@@ -26,6 +26,9 @@ static void codegen_while(
     ASTNode *node
 );
 
+static void codegen_repeat(Codegen *codegen, ASTNode *node);
+static void codegen_for(Codegen *codegen, ASTNode *node);
+
 static void codegen_return(
     Codegen *codegen,
     ASTNode *node
@@ -1116,6 +1119,14 @@ static void codegen_statement(
             );
             break;
 
+        case AST_REPEAT:
+            codegen_repeat(codegen, statement);
+            break;
+
+        case AST_FOR:
+            codegen_for(codegen, statement);
+            break;
+
         case AST_ASSIGNMENT:
             codegen_assignment(codegen, statement);
             break;
@@ -1555,7 +1566,7 @@ static void codegen_while(
         codegen->builder,
         exit_block
     );
-    
+
     codegen->current_loop = loop.parent;
     return;
 }
@@ -1588,4 +1599,191 @@ static void codegen_continue(Codegen *codegen)
         codegen->builder,
         codegen->current_loop->continue_target
     );
+}
+
+static void codegen_repeat(Codegen *codegen, ASTNode *node)
+{
+    if (codegen == NULL ||
+        node == NULL ||
+        node->kind != AST_REPEAT ||
+        codegen->current_function == NULL) {
+        return;
+    }
+
+    /* Evaluate the repeat count exactly once. */
+    LLVMValueRef count =
+        codegen_expression(codegen, node->data.repeat_stmt.count);
+
+    if (count == NULL ||
+        LLVMTypeOf(count) != llvm_number_type(codegen)) {
+        fprintf(stderr, "codegen: repeat count must be number\n");
+        return;
+    }
+
+    LLVMBasicBlockRef condition_block =
+        LLVMAppendBasicBlockInContext(
+            codegen->context, codegen->current_function, "repeat.cond");
+
+    LLVMBasicBlockRef body_block =
+        LLVMAppendBasicBlockInContext(
+            codegen->context, codegen->current_function, "repeat.body");
+
+    LLVMBasicBlockRef step_block =
+        LLVMAppendBasicBlockInContext(
+            codegen->context, codegen->current_function, "repeat.step");
+
+    LLVMBasicBlockRef exit_block =
+        LLVMAppendBasicBlockInContext(
+            codegen->context, codegen->current_function, "repeat.end");
+
+    LLVMValueRef counter =
+        LLVMBuildAlloca(codegen->builder, llvm_number_type(codegen),
+                        "repeat.counter");
+
+    LLVMBuildStore(codegen->builder, count, counter);
+    LLVMBuildBr(codegen->builder, condition_block);
+
+    CodegenLoop loop = {
+        .break_target = exit_block,
+        .continue_target = step_block,
+        .parent = codegen->current_loop
+    };
+    codegen->current_loop = &loop;
+
+    LLVMPositionBuilderAtEnd(codegen->builder, condition_block);
+
+    LLVMValueRef remaining =
+        LLVMBuildLoad2(codegen->builder, llvm_number_type(codegen),
+                       counter, "repeat.remaining");
+
+    /* Non-positive counts execute zero iterations. */
+    LLVMValueRef positive =
+        LLVMBuildICmp(
+            codegen->builder,
+            LLVMIntSGT,
+            remaining,
+            LLVMConstInt(llvm_number_type(codegen), 0, 0),
+            "repeat.positive");
+
+    LLVMBuildCondBr(
+        codegen->builder, positive, body_block, exit_block);
+
+    LLVMPositionBuilderAtEnd(codegen->builder, body_block);
+    codegen_statement(codegen, node->data.repeat_stmt.body);
+
+    LLVMBasicBlockRef body_end = LLVMGetInsertBlock(codegen->builder);
+    if (LLVMGetBasicBlockTerminator(body_end) == NULL) {
+        LLVMBuildBr(codegen->builder, step_block);
+    }
+
+    LLVMPositionBuilderAtEnd(codegen->builder, step_block);
+
+    remaining =
+        LLVMBuildLoad2(codegen->builder, llvm_number_type(codegen),
+                       counter, "repeat.before_decrement");
+
+    LLVMValueRef decremented =
+        LLVMBuildSub(
+            codegen->builder,
+            remaining,
+            LLVMConstInt(llvm_number_type(codegen), 1, 0),
+            "repeat.decremented");
+
+    LLVMBuildStore(codegen->builder, decremented, counter);
+    LLVMBuildBr(codegen->builder, condition_block);
+
+    LLVMPositionBuilderAtEnd(codegen->builder, exit_block);
+    codegen->current_loop = loop.parent;
+}
+
+static void codegen_for(Codegen *codegen, ASTNode *node)
+{
+    if (codegen == NULL ||
+        node == NULL ||
+        node->kind != AST_FOR ||
+        codegen->current_function == NULL) {
+        return;
+    }
+
+    /*
+     * Variables declared by the for initializer are visible throughout
+     * the loop, but must not leak beyond it.
+     */
+    CodegenVariable *saved_variables = codegen->variables;
+
+    codegen_statement(codegen, node->data.for_stmt.initializer);
+
+    LLVMBasicBlockRef condition_block =
+        LLVMAppendBasicBlockInContext(
+            codegen->context, codegen->current_function, "for.cond");
+
+    LLVMBasicBlockRef body_block =
+        LLVMAppendBasicBlockInContext(
+            codegen->context, codegen->current_function, "for.body");
+
+    LLVMBasicBlockRef step_block =
+        LLVMAppendBasicBlockInContext(
+            codegen->context, codegen->current_function, "for.step");
+
+    LLVMBasicBlockRef exit_block =
+        LLVMAppendBasicBlockInContext(
+            codegen->context, codegen->current_function, "for.end");
+
+    CodegenLoop loop = {
+        .break_target = exit_block,
+        .continue_target = step_block,
+        .parent = codegen->current_loop
+    };
+    codegen->current_loop = &loop;
+
+    LLVMBuildBr(codegen->builder, condition_block);
+
+    LLVMPositionBuilderAtEnd(codegen->builder, condition_block);
+
+    LLVMValueRef condition =
+        codegen_expression(codegen, node->data.for_stmt.condition);
+
+    if (condition == NULL ||
+        LLVMTypeOf(condition) != llvm_bool_type(codegen)) {
+        fprintf(stderr, "codegen: for condition must be bool\n");
+
+        LLVMBuildBr(codegen->builder, exit_block);
+        LLVMPositionBuilderAtEnd(codegen->builder, exit_block);
+        codegen->current_loop = loop.parent;
+        goto cleanup_for_variables;
+    }
+
+    LLVMBuildCondBr(
+        codegen->builder, condition, body_block, exit_block);
+
+    LLVMPositionBuilderAtEnd(codegen->builder, body_block);
+    codegen_statement(codegen, node->data.for_stmt.body);
+
+    LLVMBasicBlockRef body_end = LLVMGetInsertBlock(codegen->builder);
+    if (LLVMGetBasicBlockTerminator(body_end) == NULL) {
+        LLVMBuildBr(codegen->builder, step_block);
+    }
+
+    LLVMPositionBuilderAtEnd(codegen->builder, step_block);
+    codegen_statement(codegen, node->data.for_stmt.assignment);
+
+    LLVMBasicBlockRef step_end = LLVMGetInsertBlock(codegen->builder);
+    if (LLVMGetBasicBlockTerminator(step_end) == NULL) {
+        LLVMBuildBr(codegen->builder, condition_block);
+    }
+
+    LLVMPositionBuilderAtEnd(codegen->builder, exit_block);
+    codegen->current_loop = loop.parent;
+
+cleanup_for_variables:
+    while (codegen->variables != saved_variables) {
+        CodegenVariable *variable = codegen->variables;
+        if (variable == NULL) {
+            break;
+        }
+
+        codegen->variables = variable->next;
+        free(variable->name);
+        free(variable);
+    }
 }
