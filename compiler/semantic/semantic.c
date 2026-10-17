@@ -1641,7 +1641,7 @@ static TypeInfo *analyze_expr(
                     array->name,
                     array->name_length
                 );
-                
+
             TypeInfo *element = array->element_type;
 
             if (element == NULL) {
@@ -1658,7 +1658,7 @@ static TypeInfo *analyze_expr(
                 type =
                     make_array_type(
                         a->ctx,
-                        type,
+                        element,
                         array->array_lengths + 1,
                         array->array_dimension_count - 1
                     );

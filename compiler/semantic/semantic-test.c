@@ -50,6 +50,42 @@ int main(void)
     pass &= run("struct + array",
         "struct Point { number x; number y; } function number main() { Point p; number[3] a; p.x = 5; a[0] = p.x; return a[0]; }", 1);
 
+    pass &= run("multidimensional array",
+        "function number main() { "
+            "number[2][3] a; "
+            "a[0][0] = 7; "
+            "return a[0][0]; "
+        "}",
+        1
+    );
+
+    pass &= run("decimal array indexing",
+        "function number main() { "
+            "decimal[3] a; "
+            "a[0] = 2.5; "
+            "return 0; "
+        "}",
+        1
+    );
+
+    pass &= run("boolean array index",
+        "function number main() { "
+            "number[3] a; "
+            "bool b true; "
+            "return a[b]; "
+        "}",
+        0
+    );
+
+    pass &= run("boolean array index",
+        "function number main() { "
+            "number[3] a; "
+            "bool b true; "
+            "return a[b]; "
+        "}",
+        0
+    );
+
     pass &= run("const aggregate write",
         "struct Point { number x; } function number main() { const Point p; p.x = 1; return 0; }", 0);
 
