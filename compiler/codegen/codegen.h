@@ -31,6 +31,7 @@ typedef struct {
     LLVMValueRef current_function;
     CodegenVariable *variables;
     CodegenLoop *current_loop;
+    int has_error;
 } Codegen;
 
 Codegen *codegen_create(
@@ -39,6 +40,9 @@ Codegen *codegen_create(
 );
 
 void codegen_free(Codegen *codegen);
+
+/* Nonzero if any code-generation error has occurred. */
+int codegen_has_error(const Codegen *codegen);
 
 void codegen_dump(const Codegen *codegen);
 

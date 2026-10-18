@@ -5,6 +5,13 @@
 #include <limits.h>
 #include <string.h>
 
+/* Code-generation diagnostics are fatal for the current compilation. */
+#define CODEGEN_ERROR(codegen, ...) \
+    do { \
+        (codegen)->has_error = 1; \
+        fprintf(stderr, __VA_ARGS__); \
+    } while (0)
+
 static void codegen_free_variables(Codegen *codegen);
 
 static void codegen_variable_declaration(
@@ -119,8 +126,14 @@ Codegen *codegen_create(
     codegen->current_function = NULL;
     codegen->variables = NULL;
     codegen->current_loop = NULL;
+    codegen->has_error = 0;
 
     return codegen;
+}
+
+int codegen_has_error(const Codegen *codegen)
+{
+    return codegen == NULL || codegen->has_error;
 }
 
 void codegen_free(Codegen *codegen)
@@ -255,9 +268,7 @@ static LLVMTypeRef llvm_type_from_ast(
 
         case AST_TYPE_VOID:
             if (type.dimension_count != 0) {
-                fprintf(
-                    stderr,
-                    "codegen: array element type cannot be void\n"
+                CODEGEN_ERROR(codegen, "codegen: array element type cannot be void\n"
                 );
                 return NULL;
             }
@@ -266,9 +277,7 @@ static LLVMTypeRef llvm_type_from_ast(
 
         case AST_TYPE_STRING:
         case AST_TYPE_USER:
-            fprintf(
-                stderr,
-                "codegen: unsupported declaration type kind %d\n",
+            CODEGEN_ERROR(codegen, "codegen: unsupported declaration type kind %d\n",
                 type.kind
             );
             return NULL;
@@ -286,17 +295,13 @@ static LLVMTypeRef llvm_type_from_ast(
         ASTArrayDimension dimension = type.dimensions[i - 1];
 
         if (!dimension.has_size || dimension.size == 0) {
-            fprintf(
-                stderr,
-                "codegen: array dimensions must have a positive fixed size\n"
+            CODEGEN_ERROR(codegen, "codegen: array dimensions must have a positive fixed size\n"
             );
             return NULL;
         }
 
         if (dimension.size > UINT_MAX) {
-            fprintf(
-                stderr,
-                "codegen: array dimension is too large\n"
+            CODEGEN_ERROR(codegen, "codegen: array dimension is too large\n"
             );
             return NULL;
         }
@@ -443,9 +448,7 @@ LLVMValueRef codegen_expression(
                 );
 
             if (variable == NULL) {
-                fprintf(
-                    stderr,
-                    "codegen: undefined variable '%.*s'\n",
+                CODEGEN_ERROR(codegen, "codegen: undefined variable '%.*s'\n",
                     (int)expression->data.identifier.length,
                     expression->data.identifier.start
                 );
@@ -509,9 +512,7 @@ LLVMValueRef codegen_expression(
                     );
             }
 
-            fprintf(
-                stderr,
-                "codegen: unsupported unary operator\n"
+            CODEGEN_ERROR(codegen, "codegen: unsupported unary operator\n"
             );
 
             return NULL;
@@ -544,9 +545,7 @@ LLVMValueRef codegen_expression(
                 );
 
             if (!has_type) {
-                fprintf(
-                    stderr,
-                    "codegen: missing semantic type for binary expression\n"
+                CODEGEN_ERROR(codegen, "codegen: missing semantic type for binary expression\n"
                 );
                 return NULL;
             }
@@ -736,18 +735,14 @@ LLVMValueRef codegen_expression(
                 }
 
                 default:
-                    fprintf(
-                        stderr,
-                        "codegen: unsupported binary operator\n"
+                    CODEGEN_ERROR(codegen, "codegen: unsupported binary operator\n"
                     );
                     return NULL;
             }
         }
 
         default:
-            fprintf(
-                stderr,
-                "codegen: unsupported expression\n"
+            CODEGEN_ERROR(codegen, "codegen: unsupported expression\n"
             );
 
             return NULL;
@@ -772,9 +767,7 @@ static void codegen_variable_declaration(
             name_length
         )) {
 
-        fprintf(
-            stderr,
-            "codegen: duplicate variable '%.*s'\n",
+        CODEGEN_ERROR(codegen, "codegen: duplicate variable '%.*s'\n",
             (int)name_length,
             name
         );
@@ -796,9 +789,7 @@ static void codegen_variable_declaration(
     }
 
     if (ast_type.kind == AST_TYPE_VOID) {
-        fprintf(
-            stderr,
-            "codegen: variable cannot have type void\n"
+        CODEGEN_ERROR(codegen, "codegen: variable cannot have type void\n"
         );
         return;
     }
@@ -815,9 +806,7 @@ static void codegen_variable_declaration(
             return;
         }
     } else if (ast_type.dimension_count == 0) {
-        fprintf(
-            stderr,
-            "codegen: scalar variable requires an initializer\n"
+        CODEGEN_ERROR(codegen, "codegen: scalar variable requires an initializer\n"
         );
         return;
     }
@@ -826,10 +815,8 @@ static void codegen_variable_declaration(
         malloc(name_length + 1);
 
     if (variable_name == NULL) {
-        fprintf(
-            stderr,
-            "fatal: failed to allocate variable name\n"
-        );
+        CODEGEN_ERROR(codegen,
+            "fatal: failed to allocate variable name\n");
         return;
     }
 
@@ -868,10 +855,8 @@ static void codegen_variable_declaration(
     if (variable == NULL) {
         free(variable_name);
 
-        fprintf(
-            stderr,
-            "fatal: failed to allocate codegen variable\n"
-        );
+        CODEGEN_ERROR(codegen,
+            "fatal: failed to allocate codegen variable\n");
 
         return;
     }
@@ -885,9 +870,7 @@ static void codegen_variable_declaration(
                 node->data.var_decl.initializer,
                 &variable->type
             )) {
-            fprintf(
-                stderr,
-                "codegen: missing semantic type for initializer\n"
+            CODEGEN_ERROR(codegen, "codegen: missing semantic type for initializer\n"
             );
 
             free(variable_name);
@@ -909,9 +892,7 @@ static void codegen_variable_declaration(
                 variable->type.kind = SEM_TYPE_CHAR;
                 break;
             default:
-                fprintf(
-                    stderr,
-                    "codegen: unsupported uninitialized variable type\n"
+                CODEGEN_ERROR(codegen, "codegen: unsupported uninitialized variable type\n"
                 );
                 free(variable_name);
                 free(variable);
@@ -936,7 +917,7 @@ static void codegen_assignment(
     ASTNode *value_node = node->data.assignment.value;
 
     if (target == NULL) {
-        fprintf(stderr, "codegen: missing assignment target\n");
+        CODEGEN_ERROR(codegen, "codegen: missing assignment target\n");
         return;
     }
 
@@ -951,9 +932,7 @@ static void codegen_assignment(
         );
 
         if (variable == NULL || variable->storage_type == NULL) {
-            fprintf(
-                stderr,
-                "codegen: unknown variable in assignment '%.*s'\n",
+            CODEGEN_ERROR(codegen, "codegen: unknown variable in assignment '%.*s'\n",
                 (int)target->data.identifier.length,
                 target->data.identifier.start
             );
@@ -975,9 +954,7 @@ static void codegen_assignment(
         }
 
     } else {
-        fprintf(
-            stderr,
-            "codegen: unsupported assignment target\n"
+        CODEGEN_ERROR(codegen, "codegen: unsupported assignment target\n"
         );
         return;
     }
@@ -992,9 +969,7 @@ static void codegen_assignment(
     }
 
     if (LLVMTypeOf(value) != expected_type) {
-        fprintf(
-            stderr,
-            "codegen: assignment type mismatch\n"
+        CODEGEN_ERROR(codegen, "codegen: assignment type mismatch\n"
         );
         return;
     }
@@ -1080,9 +1055,7 @@ static void codegen_print(
             &semantic_type
         )) {
 
-        fprintf(
-            stderr,
-            "codegen: missing semantic type for print expression\n"
+        CODEGEN_ERROR(codegen, "codegen: missing semantic type for print expression\n"
         );
 
         return;
@@ -1115,9 +1088,7 @@ static void codegen_print(
             break;
 
         default:
-            fprintf(
-                stderr,
-                "codegen: print type is not supported yet\n"
+            CODEGEN_ERROR(codegen, "codegen: print type is not supported yet\n"
             );
             return;
     }
@@ -1153,9 +1124,7 @@ static void codegen_return(
 {
     if (node->data.return_stmt.expression == NULL) {
 
-        fprintf(
-            stderr,
-            "codegen: return without value is not supported yet\n"
+        CODEGEN_ERROR(codegen, "codegen: return without value is not supported yet\n"
         );
 
         return;
@@ -1251,9 +1220,7 @@ static void codegen_statement(
             break;
 
         default:
-            fprintf(
-                stderr,
-                "codegen: unsupported statement kind %d\n",
+            CODEGEN_ERROR(codegen, "codegen: unsupported statement kind %d\n",
                 statement->kind
             );
             break;
@@ -1268,9 +1235,7 @@ static void codegen_block(
     if (block == NULL ||
         block->kind != AST_BLOCK) {
 
-        fprintf(
-            stderr,
-            "codegen: expected block\n"
+        CODEGEN_ERROR(codegen, "codegen: expected block\n"
         );
 
         return;
@@ -1335,9 +1300,7 @@ void codegen_function(
 
     if (function->data.function_decl.parameter_count != 0) {
 
-        fprintf(
-            stderr,
-            "codegen: function parameters not supported yet\n"
+        CODEGEN_ERROR(codegen, "codegen: function parameters not supported yet\n"
         );
 
         return;
@@ -1357,10 +1320,8 @@ void codegen_function(
         );
 
     if (function_name == NULL) {
-        fprintf(
-            stderr,
-            "fatal: failed to allocate function name\n"
-        );
+        CODEGEN_ERROR(codegen,
+            "fatal: failed to allocate function name\n");
         return;
     }
 
@@ -1419,7 +1380,7 @@ static void codegen_if(
 
     if (condition == NULL ||
         codegen->current_function == NULL) {
-        fprintf(stderr, "codegen: failed to generate if condition\n");
+        CODEGEN_ERROR(codegen, "codegen: failed to generate if condition\n");
         return;
     }
 
@@ -1592,9 +1553,7 @@ static void codegen_while(
         LLVMTypeOf(condition) !=
             LLVMInt1TypeInContext(codegen->context)) {
 
-        fprintf(
-            stderr,
-            "codegen: while condition must be bool\n"
+        CODEGEN_ERROR(codegen, "codegen: while condition must be bool\n"
         );
 
         LLVMBuildBr(
@@ -1650,8 +1609,7 @@ static void codegen_break(Codegen *codegen)
 {
     if (codegen == NULL ||
         codegen->current_loop == NULL) {
-        fprintf(stderr,
-                "codegen: break used outside a loop\n");
+        CODEGEN_ERROR(codegen, "codegen: break used outside a loop\n");
         return;
     }
 
@@ -1665,8 +1623,7 @@ static void codegen_continue(Codegen *codegen)
 {
     if (codegen == NULL ||
         codegen->current_loop == NULL) {
-        fprintf(stderr,
-                "codegen: continue used outside a loop\n");
+        CODEGEN_ERROR(codegen, "codegen: continue used outside a loop\n");
         return;
     }
 
@@ -1691,7 +1648,7 @@ static void codegen_repeat(Codegen *codegen, ASTNode *node)
 
     if (count == NULL ||
         LLVMTypeOf(count) != llvm_number_type(codegen)) {
-        fprintf(stderr, "codegen: repeat count must be number\n");
+        CODEGEN_ERROR(codegen, "codegen: repeat count must be number\n");
         return;
     }
 
@@ -1820,7 +1777,7 @@ static void codegen_for(Codegen *codegen, ASTNode *node)
 
     if (condition == NULL ||
         LLVMTypeOf(condition) != llvm_bool_type(codegen)) {
-        fprintf(stderr, "codegen: for condition must be bool\n");
+        CODEGEN_ERROR(codegen, "codegen: for condition must be bool\n");
 
         LLVMBuildBr(codegen->builder, exit_block);
         LLVMPositionBuilderAtEnd(codegen->builder, exit_block);
@@ -1895,7 +1852,7 @@ static LLVMValueRef codegen_array_element_pointer(
         );
 
         if (variable == NULL || variable->storage_type == NULL) {
-            fprintf(stderr, "codegen: unknown array variable\n");
+            CODEGEN_ERROR(codegen, "codegen: unknown array variable\n");
             return NULL;
         }
 
@@ -1916,15 +1873,13 @@ static LLVMValueRef codegen_array_element_pointer(
         }
 
     } else {
-        fprintf(
-            stderr,
-            "codegen: unsupported array expression\n"
+        CODEGEN_ERROR(codegen, "codegen: unsupported array expression\n"
         );
         return NULL;
     }
 
     if (LLVMGetTypeKind(array_type) != LLVMArrayTypeKind) {
-        fprintf(stderr, "codegen: indexed expression is not an array\n");
+        CODEGEN_ERROR(codegen, "codegen: indexed expression is not an array\n");
         return NULL;
     }
 
@@ -1932,7 +1887,7 @@ static LLVMValueRef codegen_array_element_pointer(
 
     if (index == NULL ||
         LLVMTypeOf(index) != llvm_number_type(codegen)) {
-        fprintf(stderr, "codegen: invalid array index value\n");
+        CODEGEN_ERROR(codegen, "codegen: invalid array index value\n");
         return NULL;
     }
 

@@ -6,10 +6,19 @@ CFLAGS = -std=c17 -Wall -Wextra -Wpedantic
 
 LLVM_CFLAGS = $(shell llvm-config --cflags)
 LLVM_LDFLAGS = $(shell llvm-config --ldflags)
-LLVM_LIBS = $(shell llvm-config --libs core native)
+LLVM_LIBS = $(shell llvm-config --libs core analysis native)
 
 CFLAGS += $(LLVM_CFLAGS)
 LDFLAGS = $(LLVM_LDFLAGS) $(LLVM_LIBS)
+
+PEBBLE = peb
+DRIVER_SOURCES = \
+    compiler/main.c \
+    compiler/codegen/codegen.c \
+    compiler/semantic/semantic.c \
+    compiler/parser/parser.c \
+    compiler/ast/ast.c \
+    compiler/lexer/lexer.c
 
 SMOKE = pebble-smoke
 CODEGEN_TEST_BIN = pebble-codegen-test
@@ -25,8 +34,11 @@ CODEGEN_SOURCES = \
     compiler/ast/ast.c \
     compiler/lexer/lexer.c
 
-.PHONY: all smoke codegen-test verify native-test test clean multidim-test bounds-test primitive-array-tests
-all: smoke
+.PHONY: all peb smoke codegen-test verify native-test test clean multidim-test bounds-test primitive-array-tests driver-test
+all: peb
+
+peb: $(DRIVER_SOURCES)
+	$(CC) $(CFLAGS) $(DRIVER_SOURCES) $(LDFLAGS) -o $(PEBBLE)
 
 smoke:
 	$(CC) $(CFLAGS) compiler/codegen/smoke.c $(LDFLAGS) -o $(SMOKE)
@@ -109,8 +121,11 @@ semantic-bounds-test: $(CODEGEN_TEST_BIN)
 	done; \
 	rm -f semantic-bounds-test.log
 
-test: smoke native-test
+test: smoke native-test driver-test
+
+driver-test: peb
+	./tests/driver_test.sh ./peb
 
 clean:
-	rm -f $(SMOKE) pebble-smoke.o pebble-smoke-native \
+	rm -f $(PEBBLE) $(SMOKE) pebble-smoke.o pebble-smoke-native \
 		$(CODEGEN_TEST_BIN) $(CODEGEN_IR) $(CODEGEN_EXE)
