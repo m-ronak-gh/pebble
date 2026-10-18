@@ -12,6 +12,7 @@ typedef struct CodegenVariable {
     char *name;
     LLVMValueRef alloca;
     SemanticType type;
+    LLVMTypeRef storage_type;
     struct CodegenVariable *next;
 } CodegenVariable;
 

@@ -1,6 +1,7 @@
 #include "semantic.h"
 
 #include <stdio.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -133,6 +134,36 @@ static void semantic_error(
     );
 }
 
+static int try_get_integer_literal(
+    const ASTNode *node,
+    long long *value
+) {
+    if (node == NULL || value == NULL) {
+        return 0;
+    }
+
+    if (node->kind == AST_NUMBER_LITERAL) {
+        *value = node->data.number;
+        return 1;
+    }
+
+    if (node->kind == AST_UNARY &&
+        node->data.unary.operator == AST_UNARY_NEGATE &&
+        node->data.unary.operand != NULL &&
+        node->data.unary.operand->kind == AST_NUMBER_LITERAL) {
+
+        long long operand = node->data.unary.operand->data.number;
+
+        if (operand == LLONG_MIN) {
+            return 0;
+        }
+
+        *value = -operand;
+        return 1;
+    }
+
+    return 0;
+}
 
 // Semantic type names                                                       */
 
@@ -1604,14 +1635,14 @@ static TypeInfo *analyze_expr(
                 return error_type(a->ctx, node);
             }
 
-            if (node->data.index.index->kind ==
-                AST_NUMBER_LITERAL) {
+            long long literal_index;
 
-                long long literal =
-                    node->data.index.index->data.number;
+            if (try_get_integer_literal(
+                    node->data.index.index,
+                    &literal_index)) {
 
-                if (literal < 0 ||
-                    (unsigned long long)literal >=
+                if (literal_index < 0 ||
+                    (unsigned long long)literal_index >=
                         array->array_lengths[0]) {
 
                     semantic_error(

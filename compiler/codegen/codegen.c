@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <string.h>
 
 static void codegen_free_variables(Codegen *codegen);
@@ -29,6 +30,12 @@ static void codegen_while(
 static void codegen_repeat(Codegen *codegen, ASTNode *node);
 static void codegen_for(Codegen *codegen, ASTNode *node);
 
+static LLVMValueRef codegen_array_element_pointer(
+    Codegen *codegen,
+    ASTNode *expression,
+    LLVMTypeRef *element_type
+);
+
 static void codegen_return(
     Codegen *codegen,
     ASTNode *node
@@ -46,11 +53,6 @@ static void codegen_print(
 
 static void codegen_break(Codegen *codegen);
 static void codegen_continue(Codegen *codegen);
-
-static LLVMTypeRef llvm_type_from_semantic(
-    Codegen *codegen,
-    SemanticType type
-);
 
 static LLVMTypeRef llvm_type_from_ast(
     Codegen *codegen,
@@ -227,72 +229,40 @@ static LLVMTypeRef llvm_char_type(
     );
 }
 
-// Semantic type -> LLVM type
-static LLVMTypeRef llvm_type_from_semantic(
-    Codegen *codegen,
-    SemanticType type
-)
-{
-    switch (type.kind) {
-
-        case SEM_TYPE_NUMBER:
-            return llvm_number_type(codegen);
-
-        case SEM_TYPE_DECIMAL:
-            return llvm_decimal_type(codegen);
-
-        case SEM_TYPE_BOOL:
-            return llvm_bool_type(codegen);
-
-        case SEM_TYPE_CHAR:
-            return llvm_char_type(codegen);
-
-        case SEM_TYPE_VOID:
-            return LLVMVoidTypeInContext(
-                codegen->context
-            );
-
-        default:
-            fprintf(
-                stderr,
-                "codegen: unsupported semantic type %d\n",
-                type.kind
-            );
-            return NULL;
-    }
-}
-
 static LLVMTypeRef llvm_type_from_ast(
     Codegen *codegen,
     ASTType type
 )
 {
-    if (type.dimension_count != 0) {
-        fprintf(
-            stderr,
-            "codegen: arrays are not supported yet\n"
-        );
-        return NULL;
-    }
+    LLVMTypeRef element_type = NULL;
 
     switch (type.kind) {
-
         case AST_TYPE_NUMBER:
-            return llvm_number_type(codegen);
+            element_type = llvm_number_type(codegen);
+            break;
 
         case AST_TYPE_DECIMAL:
-            return llvm_decimal_type(codegen);
+            element_type = llvm_decimal_type(codegen);
+            break;
 
         case AST_TYPE_BOOL:
-            return llvm_bool_type(codegen);
+            element_type = llvm_bool_type(codegen);
+            break;
 
         case AST_TYPE_CHAR:
-            return llvm_char_type(codegen);
+            element_type = llvm_char_type(codegen);
+            break;
 
         case AST_TYPE_VOID:
-            return LLVMVoidTypeInContext(
-                codegen->context
-            );
+            if (type.dimension_count != 0) {
+                fprintf(
+                    stderr,
+                    "codegen: array element type cannot be void\n"
+                );
+                return NULL;
+            }
+
+            return LLVMVoidTypeInContext(codegen->context);
 
         case AST_TYPE_STRING:
         case AST_TYPE_USER:
@@ -304,13 +274,40 @@ static LLVMTypeRef llvm_type_from_ast(
             return NULL;
     }
 
-    fprintf(
-        stderr,
-        "codegen: unknown AST type kind %d\n",
-        type.kind
-    );
+    if (element_type == NULL) {
+        return NULL;
+    }
 
-    return NULL;
+    /*
+     * Construct dimensions from innermost to outermost.
+     * For number a[2][3], this creates [2 x [3 x i64]].
+     */
+    for (size_t i = type.dimension_count; i > 0; --i) {
+        ASTArrayDimension dimension = type.dimensions[i - 1];
+
+        if (!dimension.has_size || dimension.size == 0) {
+            fprintf(
+                stderr,
+                "codegen: array dimensions must have a positive fixed size\n"
+            );
+            return NULL;
+        }
+
+        if (dimension.size > UINT_MAX) {
+            fprintf(
+                stderr,
+                "codegen: array dimension is too large\n"
+            );
+            return NULL;
+        }
+
+        element_type = LLVMArrayType(
+            element_type,
+            (unsigned)dimension.size
+        );
+    }
+
+    return element_type;
 }
 
 // Variables
@@ -415,6 +412,28 @@ LLVMValueRef codegen_expression(
                 0
             );
 
+        case AST_INDEX: {
+            LLVMTypeRef element_type = NULL;
+
+            LLVMValueRef element_pointer =
+                codegen_array_element_pointer(
+                    codegen,
+                    expression,
+                    &element_type
+                );
+
+            if (element_pointer == NULL || element_type == NULL) {
+                return NULL;
+            }
+
+            return LLVMBuildLoad2(
+                codegen->builder,
+                element_type,
+                element_pointer,
+                "array.element"
+            );
+        }
+
         case AST_IDENTIFIER: {
             CodegenVariable *variable =
                 codegen_find_variable(
@@ -434,11 +453,7 @@ LLVMValueRef codegen_expression(
                 return NULL;
             }
 
-            LLVMTypeRef type =
-                llvm_type_from_semantic(
-                    codegen,
-                    variable->type
-                );
+            LLVMTypeRef type = variable->storage_type;
 
             if (type == NULL) {
                 return NULL;
@@ -788,13 +803,22 @@ static void codegen_variable_declaration(
         return;
     }
 
-    LLVMValueRef initializer =
-        codegen_expression(
+    LLVMValueRef initializer = NULL;
+
+    if (node->data.var_decl.initializer != NULL) {
+        initializer = codegen_expression(
             codegen,
             node->data.var_decl.initializer
         );
 
-    if (initializer == NULL) {
+        if (initializer == NULL) {
+            return;
+        }
+    } else if (ast_type.dimension_count == 0) {
+        fprintf(
+            stderr,
+            "codegen: scalar variable requires an initializer\n"
+        );
         return;
     }
 
@@ -824,11 +848,19 @@ static void codegen_variable_declaration(
             variable_name
         );
 
-    LLVMBuildStore(
-        codegen->builder,
-        initializer,
-        alloca
-    );
+    if (initializer != NULL) {
+        LLVMBuildStore(
+            codegen->builder,
+            initializer,
+            alloca
+        );
+    } else {
+        LLVMBuildStore(
+            codegen->builder,
+            LLVMConstNull(llvm_type),
+            alloca
+        );
+    }
 
     CodegenVariable *variable =
         malloc(sizeof(*variable));
@@ -844,35 +876,56 @@ static void codegen_variable_declaration(
         return;
     }
 
-    memset(
-        &variable->type,
-        0,
-        sizeof(variable->type)
-    );
+    memset(&variable->type, 0, sizeof(variable->type));
 
-    if (codegen->semantic != NULL &&
-        !semantic_type_of(
-            codegen->semantic,
-            node->data.var_decl.initializer,
-            &variable->type
-        )) {
+    if (node->data.var_decl.initializer != NULL) {
+        if (codegen->semantic == NULL ||
+            !semantic_type_of(
+                codegen->semantic,
+                node->data.var_decl.initializer,
+                &variable->type
+            )) {
+            fprintf(
+                stderr,
+                "codegen: missing semantic type for initializer\n"
+            );
 
-        fprintf(
-            stderr,
-            "codegen: missing semantic type for initializer\n"
-        );
-
-        free(variable_name);
-        free(variable);
-        return;
+            free(variable_name);
+            free(variable);
+            return;
+        }
+    } else {
+        switch (ast_type.kind) {
+            case AST_TYPE_NUMBER:
+                variable->type.kind = SEM_TYPE_NUMBER;
+                break;
+            case AST_TYPE_DECIMAL:
+                variable->type.kind = SEM_TYPE_DECIMAL;
+                break;
+            case AST_TYPE_BOOL:
+                variable->type.kind = SEM_TYPE_BOOL;
+                break;
+            case AST_TYPE_CHAR:
+                variable->type.kind = SEM_TYPE_CHAR;
+                break;
+            default:
+                fprintf(
+                    stderr,
+                    "codegen: unsupported uninitialized variable type\n"
+                );
+                free(variable_name);
+                free(variable);
+                return;
+        }
     }
 
+    variable->storage_type = llvm_type;
     variable->name = variable_name;
     variable->alloca = alloca;
     variable->next = codegen->variables;
-
     codegen->variables = variable;
 }
+
 
 static void codegen_assignment(
     Codegen *codegen,
@@ -882,53 +935,75 @@ static void codegen_assignment(
     ASTNode *target = node->data.assignment.target;
     ASTNode *value_node = node->data.assignment.value;
 
-    if (target == NULL || target->kind != AST_IDENTIFIER) {
+    if (target == NULL) {
+        fprintf(stderr, "codegen: missing assignment target\n");
+        return;
+    }
+
+    LLVMValueRef target_pointer = NULL;
+    LLVMTypeRef expected_type = NULL;
+
+    if (target->kind == AST_IDENTIFIER) {
+        CodegenVariable *variable = codegen_find_variable(
+            codegen,
+            target->data.identifier.start,
+            target->data.identifier.length
+        );
+
+        if (variable == NULL || variable->storage_type == NULL) {
+            fprintf(
+                stderr,
+                "codegen: unknown variable in assignment '%.*s'\n",
+                (int)target->data.identifier.length,
+                target->data.identifier.start
+            );
+            return;
+        }
+
+        target_pointer = variable->alloca;
+        expected_type = variable->storage_type;
+
+    } else if (target->kind == AST_INDEX) {
+        target_pointer = codegen_array_element_pointer(
+            codegen,
+            target,
+            &expected_type
+        );
+
+        if (target_pointer == NULL || expected_type == NULL) {
+            return;
+        }
+
+    } else {
         fprintf(
             stderr,
-            "codegen: only identifier assignments are supported currently\n"
+            "codegen: unsupported assignment target\n"
         );
         return;
     }
 
-    CodegenVariable *variable = codegen_find_variable(
+    LLVMValueRef value = codegen_expression(
         codegen,
-        target->data.identifier.start,
-        target->data.identifier.length
+        value_node
     );
-
-    if (variable == NULL) {
-        fprintf(
-            stderr,
-            "codegen: unknown variable in assignment '%.*s'\n",
-            (int)target->data.identifier.length,
-            target->data.identifier.start
-        );
-        return;
-    }
-
-    LLVMValueRef value = codegen_expression(codegen, value_node);
 
     if (value == NULL) {
         return;
     }
 
-    LLVMTypeRef expected_type = llvm_type_from_semantic(
-        codegen,
-        variable->type
-    );
-
-    if (expected_type == NULL ||
-        LLVMTypeOf(value) != expected_type) {
+    if (LLVMTypeOf(value) != expected_type) {
         fprintf(
             stderr,
-            "codegen: assignment type mismatch for '%.*s'\n",
-            (int)target->data.identifier.length,
-            target->data.identifier.start
+            "codegen: assignment type mismatch\n"
         );
         return;
     }
 
-    LLVMBuildStore(codegen->builder, value, variable->alloca);
+    LLVMBuildStore(
+        codegen->builder,
+        value,
+        target_pointer
+    );
 }
 
 // printf
@@ -1786,4 +1861,186 @@ cleanup_for_variables:
         free(variable->name);
         free(variable);
     }
+}
+
+static LLVMValueRef codegen_array_element_pointer(
+    Codegen *codegen,
+    ASTNode *expression,
+    LLVMTypeRef *element_type
+)
+{
+    if (expression == NULL ||
+        expression->kind != AST_INDEX ||
+        element_type == NULL) {
+        return NULL;
+    }
+
+    ASTNode *array_node = expression->data.index.array;
+    ASTNode *index_node = expression->data.index.index;
+
+    LLVMValueRef array_pointer = NULL;
+    LLVMTypeRef array_type = NULL;
+
+    /*
+     * Resolve the base array. Nested AST_INDEX nodes allow
+     * multidimensional arrays to be indexed one dimension at a time.
+     */
+    if (array_node != NULL &&
+        array_node->kind == AST_IDENTIFIER) {
+
+        CodegenVariable *variable = codegen_find_variable(
+            codegen,
+            array_node->data.identifier.start,
+            array_node->data.identifier.length
+        );
+
+        if (variable == NULL || variable->storage_type == NULL) {
+            fprintf(stderr, "codegen: unknown array variable\n");
+            return NULL;
+        }
+
+        array_pointer = variable->alloca;
+        array_type = variable->storage_type;
+
+    } else if (array_node != NULL &&
+               array_node->kind == AST_INDEX) {
+
+        array_pointer = codegen_array_element_pointer(
+            codegen,
+            array_node,
+            &array_type
+        );
+
+        if (array_pointer == NULL || array_type == NULL) {
+            return NULL;
+        }
+
+    } else {
+        fprintf(
+            stderr,
+            "codegen: unsupported array expression\n"
+        );
+        return NULL;
+    }
+
+    if (LLVMGetTypeKind(array_type) != LLVMArrayTypeKind) {
+        fprintf(stderr, "codegen: indexed expression is not an array\n");
+        return NULL;
+    }
+
+    LLVMValueRef index = codegen_expression(codegen, index_node);
+
+    if (index == NULL ||
+        LLVMTypeOf(index) != llvm_number_type(codegen)) {
+        fprintf(stderr, "codegen: invalid array index value\n");
+        return NULL;
+    }
+
+    unsigned length = LLVMGetArrayLength(array_type);
+    LLVMTypeRef index_type = LLVMTypeOf(index);
+
+    /*
+     * Runtime bounds check: index must satisfy 0 <= index < length.
+     */
+    LLVMValueRef zero = LLVMConstInt(index_type, 0, 0);
+    LLVMValueRef upper_bound = LLVMConstInt(
+        index_type,
+        length,
+        0
+    );
+
+    LLVMValueRef below_zero = LLVMBuildICmp(
+        codegen->builder,
+        LLVMIntSLT,
+        index,
+        zero,
+        "array.index.negative"
+    );
+
+    LLVMValueRef above_bound = LLVMBuildICmp(
+        codegen->builder,
+        LLVMIntSGE,
+        index,
+        upper_bound,
+        "array.index.too.large"
+    );
+
+    LLVMValueRef out_of_bounds = LLVMBuildOr(
+        codegen->builder,
+        below_zero,
+        above_bound,
+        "array.index.out.of.bounds"
+    );
+
+    LLVMBasicBlockRef fail_block = LLVMAppendBasicBlockInContext(
+        codegen->context,
+        codegen->current_function,
+        "array.bounds.fail"
+    );
+
+    LLVMBasicBlockRef valid_block = LLVMAppendBasicBlockInContext(
+        codegen->context,
+        codegen->current_function,
+        "array.bounds.valid"
+    );
+
+    LLVMBuildCondBr(
+        codegen->builder,
+        out_of_bounds,
+        fail_block,
+        valid_block
+    );
+
+    LLVMPositionBuilderAtEnd(codegen->builder, fail_block);
+
+    LLVMTypeRef abort_type = LLVMFunctionType(
+        LLVMVoidTypeInContext(codegen->context),
+        NULL,
+        0,
+        0
+    );
+
+    LLVMValueRef abort_function = LLVMGetNamedFunction(
+        codegen->module,
+        "abort"
+    );
+
+    if (abort_function == NULL) {
+        abort_function = LLVMAddFunction(
+            codegen->module,
+            "abort",
+            abort_type
+        );
+    }
+
+    LLVMBuildCall2(
+        codegen->builder,
+        abort_type,
+        abort_function,
+        NULL,
+        0,
+        ""
+    );
+
+    LLVMBuildUnreachable(codegen->builder);
+
+    LLVMPositionBuilderAtEnd(codegen->builder, valid_block);
+
+    LLVMValueRef indices[] = {
+        LLVMConstInt(llvm_number_type(codegen), 0, 0),
+        index
+    };
+
+    LLVMValueRef element_pointer = LLVMBuildGEP2(
+        codegen->builder,
+        array_type,
+        array_pointer,
+        indices,
+        2,
+        "array.element.ptr"
+    );
+
+    *element_type = LLVMGetElementType(array_type);
+
+    return element_pointer;
 }

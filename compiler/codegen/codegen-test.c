@@ -1,30 +1,90 @@
+
 #include <stdio.h>
+#include <string.h>
 
 #include "../parser/parser.h"
 #include "../semantic/semantic.h"
 #include "codegen.h"
 
-int main(void)
+int main(int argc, char **argv)
 {
-    const char *source =
-        "function number main() {"
-            "number total 0;"
+    const char *source;
 
-            "for (number i 0; i < 3; i = i + 1) {"
-                "repeat (3) {"
-                    "if (i == 1) {"
-                        "break;"
-                    "}"
-                    "if (i == 0) {"
-                        "continue;"
-                    "}"
-                    "total = total + 1;"
+    if (argc < 2 || strcmp(argv[1], "valid") == 0) {
+        source =
+            "function number main() {"
+                "number[10] scores;"
+                "scores[2] = 33;"
+                "return scores[2];"
+            "}";
+    } else if (strcmp(argv[1], "negative") == 0) {
+        source =
+            "function number main() {"
+                "number[10] scores;"
+                "return scores[-1];"
+            "}";
+    } else if (strcmp(argv[1], "upper-literal") == 0) {
+        source =
+            "function number main() {"
+                "number[10] scores;"
+                "return scores[10];"
+            "}";
+    } else if (strcmp(argv[1], "upper") == 0) {
+        source =
+            "function number main() {"
+                "number[10] scores;"
+                "number index 5 + 5;"
+                "return scores[index];"
+            "}";
+    } else if (strcmp(argv[1], "multi") == 0) {
+        source =
+            "function number main() {"
+                "number[3][4] matrix;"
+                "matrix[1][2] = 33;"
+                "return matrix[1][2];"
+            "}";
+    } else if (strcmp(argv[1], "decimal-array") == 0) {
+        source =
+            "function number main() {"
+                "decimal[4] values;"
+                "values[1] = 12.5;"
+                "if (values[1] == 12.5) {"
+                    "return 33;"
                 "}"
-                "total = total + 10;"
-            "}"
+                "return 1;"
+            "}";
 
-            "return total;"
-        "}";
+    } else if (strcmp(argv[1], "bool-array") == 0) {
+        source =
+            "function number main() {"
+                "bool[4] flags;"
+                "flags[1] = true;"
+                "if (flags[1]) {"
+                    "return 33;"
+                "}"
+                "return 1;"
+            "}";
+
+    } else if (strcmp(argv[1], "char-array") == 0) {
+        source =
+            "function number main() {"
+                "char[4] letters;"
+                "letters[1] = 'A';"
+                "if (letters[1] == 'A') {"
+                    "return 33;"
+                "}"
+                "return 1;"
+            "}";
+    } else if (strcmp(argv[1], "zero-array") == 0) {
+        source =
+            "function number main() {"
+                "number[4] values;"
+                "return values[0];"
+            "}";
+    } else {
+        fprintf(stderr, "usage: %s [valid|negative|upper-literal|upper|multi|decimal-array|bool-array|char-array|zero-array]\n", argv[0]);
+        return 2;
+    }
 
     Parser parser;
     parser_init(&parser, source);
@@ -61,7 +121,8 @@ int main(void)
         return 1;
     }
 
-    printf("integration test: LLVM IR generated successfully\n");
+    printf("integration test: LLVM IR generated successfully (%s)\n",
+           argc >= 2 ? argv[1] : "valid");
 
     codegen_free(codegen);
     semantic_free(semantic);
