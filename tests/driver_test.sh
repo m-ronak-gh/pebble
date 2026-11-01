@@ -159,11 +159,21 @@ else
     pass "reject constant out-of-bounds access"
 fi
 
-# Test 7: unsupported string printing must fail honestly
+# Test 7: string literal and variable printing.
 cat > "$TMP_DIR/string.pb" <<'EOF'
 function number main() {
-    print "Hello World!";
+    string message "Hello";
+    string empty "";
+    print message;
+    print empty;
+    print "First";
+    print "Second";
+    print identity("Function round trip");
     return 0;
+}
+
+function string identity(string value) {
+    return value;
 }
 EOF
 
@@ -252,17 +262,16 @@ else
     cat "$TMP_DIR/log"
 fi
 
-if "$COMPILER" build "$TMP_DIR/string.pb" -o "$TMP_DIR/string" \
-    >"$TMP_DIR/log" 2>&1; then
-    fail "reject unsupported string printing"
-else
-    pass "unsupported string printing reports failure"
-fi
+# Test 7: string literals and variables can be printed.
+EXPECTED=$(printf 'Hello\n\nFirst\nSecond\nFunction round trip')
 
-if [ -e "$TMP_DIR/string" ]; then
-    fail "failed code generation left an executable"
+if "$COMPILER" build "$TMP_DIR/string.pb" -o "$TMP_DIR/string" \
+    >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/string")" = "$EXPECTED" ]; then
+    pass "string literal and variable printing"
 else
-    pass "no executable after code-generation error"
+    fail "string literal and variable printing"
+    cat "$TMP_DIR/log"
 fi
 
 echo

@@ -25,7 +25,8 @@ typedef struct {
     LLVMContextRef context;
     LLVMModuleRef module;
     LLVMBuilderRef builder;
-
+    LLVMTypeRef string_type;
+    size_t string_literal_count;
     const SemanticContext *semantic;
 
     LLVMValueRef current_function;

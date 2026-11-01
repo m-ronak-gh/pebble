@@ -122,6 +122,29 @@ Codegen *codegen_create(
             codegen->context
         );
 
+    codegen->string_type =
+        LLVMStructCreateNamed(
+            codegen->context,
+            "PebbleString"
+        );
+
+    LLVMTypeRef string_fields[] = {
+        LLVMInt64TypeInContext(codegen->context),
+        LLVMPointerType(
+            LLVMInt8TypeInContext(codegen->context),
+            0
+        )
+    };
+
+    LLVMStructSetBody(
+        codegen->string_type,
+        string_fields,
+        2,
+        0
+    );
+
+    codegen->string_literal_count = 0;
+
     codegen->semantic = semantic;
     codegen->current_function = NULL;
     codegen->variables = NULL;
@@ -276,6 +299,9 @@ static LLVMTypeRef llvm_type_from_ast(
             return LLVMVoidTypeInContext(codegen->context);
 
         case AST_TYPE_STRING:
+            element_type = codegen->string_type;
+            break;
+
         case AST_TYPE_USER:
             CODEGEN_ERROR(codegen, "codegen: unsupported declaration type kind %d\n",
                 type.kind
@@ -377,6 +403,98 @@ static void codegen_free_variables(
     codegen->variables = NULL;
 }
 
+static LLVMValueRef codegen_string_literal(
+    Codegen *codegen,
+    ASTNode *expression
+)
+{
+    size_t length = expression->data.string.length;
+
+    if (length > UINT_MAX) {
+        CODEGEN_ERROR(
+            codegen,
+            "codegen: string literal is too large\n"
+        );
+        return NULL;
+    }
+
+    char global_name[64];
+
+    int name_length = snprintf(
+        global_name,
+        sizeof(global_name),
+        ".pebble.str.%zu",
+        codegen->string_literal_count
+    );
+
+    if (name_length < 0 ||
+        (size_t)name_length >= sizeof(global_name)) {
+
+        CODEGEN_ERROR(
+            codegen,
+            "codegen: failed to name string literal\n"
+        );
+        return NULL;
+    }
+
+    codegen->string_literal_count++;
+
+    LLVMValueRef string_data =
+        LLVMConstStringInContext(
+            codegen->context,
+            expression->data.string.start,
+            (unsigned)length,
+            0
+        );
+
+    LLVMTypeRef data_type = LLVMTypeOf(string_data);
+
+    LLVMValueRef global =
+        LLVMAddGlobal(
+            codegen->module,
+            data_type,
+            global_name
+        );
+
+    LLVMSetInitializer(global, string_data);
+    LLVMSetGlobalConstant(global, 1);
+    LLVMSetLinkage(global, LLVMPrivateLinkage);
+
+    LLVMValueRef zero = LLVMConstInt(
+        LLVMInt32TypeInContext(codegen->context),
+        0,
+        0
+    );
+
+    LLVMValueRef indices[] = {
+        zero,
+        zero
+    };
+
+    LLVMValueRef data_pointer =
+        LLVMConstInBoundsGEP2(
+            data_type,
+            global,
+            indices,
+            2
+        );
+
+    LLVMValueRef fields[] = {
+        LLVMConstInt(
+            LLVMInt64TypeInContext(codegen->context),
+            (unsigned long long)length,
+            0
+        ),
+        data_pointer
+    };
+
+    return LLVMConstNamedStruct(
+        codegen->string_type,
+        fields,
+        2
+    );
+}
+
 // Expressions
 LLVMValueRef codegen_expression(
     Codegen *codegen,
@@ -407,6 +525,12 @@ LLVMValueRef codegen_expression(
                 llvm_bool_type(codegen),
                 expression->data.boolean ? 1 : 0,
                 0
+            );
+
+        case AST_STRING_LITERAL:
+            return codegen_string_literal(
+                codegen,
+                expression
             );
 
         case AST_CHAR_LITERAL:
@@ -1069,6 +1193,197 @@ static LLVMValueRef codegen_declare_printf(
     );
 }
 
+/*
+ * Pebble currently targets the host architecture.
+ * Therefore, the compiler's native size_t width matches
+ * the generated program's size_t width.
+ */
+static LLVMTypeRef codegen_size_t_type(Codegen *codegen)
+{
+    return LLVMIntTypeInContext(
+        codegen->context,
+        (unsigned)(sizeof(size_t) * CHAR_BIT)
+    );
+}
+
+static LLVMTypeRef codegen_fwrite_type(Codegen *codegen)
+{
+    LLVMTypeRef pointer_type =
+        LLVMPointerType(
+            LLVMInt8TypeInContext(codegen->context),
+            0
+        );
+
+    LLVMTypeRef size_type = codegen_size_t_type(codegen);
+
+    LLVMTypeRef parameters[] = {
+        pointer_type,
+        size_type,
+        size_type,
+        pointer_type
+    };
+
+    return LLVMFunctionType(
+        size_type,
+        parameters,
+        4,
+        0
+    );
+}
+
+static LLVMValueRef codegen_declare_fwrite(Codegen *codegen)
+{
+    LLVMValueRef existing =
+        LLVMGetNamedFunction(codegen->module, "fwrite");
+
+    LLVMTypeRef function_type = codegen_fwrite_type(codegen);
+
+    if (existing != NULL) {
+        if (LLVMGlobalGetValueType(existing) != function_type) {
+            CODEGEN_ERROR(
+                codegen,
+                "codegen: incompatible declaration of fwrite\n"
+            );
+            return NULL;
+        }
+
+        return existing;
+    }
+
+    return LLVMAddFunction(
+        codegen->module,
+        "fwrite",
+        function_type
+    );
+}
+
+static LLVMValueRef codegen_stdout_stream(Codegen *codegen)
+{
+    LLVMTypeRef pointer_type =
+        LLVMPointerType(
+            LLVMInt8TypeInContext(codegen->context),
+            0
+        );
+
+    LLVMValueRef stdout_global =
+        LLVMGetNamedGlobal(codegen->module, "stdout");
+
+    if (stdout_global == NULL) {
+        stdout_global =
+            LLVMAddGlobal(
+                codegen->module,
+                pointer_type,
+                "stdout"
+            );
+
+        LLVMSetLinkage(
+            stdout_global,
+            LLVMExternalLinkage
+        );
+    } else if (LLVMGlobalGetValueType(stdout_global) != pointer_type) {
+        CODEGEN_ERROR(
+            codegen,
+            "codegen: incompatible declaration of stdout\n"
+        );
+        return NULL;
+    }
+
+    return LLVMBuildLoad2(
+        codegen->builder,
+        pointer_type,
+        stdout_global,
+        "stdout.stream"
+    );
+}
+
+static void codegen_print_string(
+    Codegen *codegen,
+    LLVMValueRef value
+)
+{
+    LLVMTypeRef size_type = codegen_size_t_type(codegen);
+
+    LLVMValueRef length =
+        LLVMBuildExtractValue(
+            codegen->builder,
+            value,
+            0,
+            "string.length"
+        );
+
+    LLVMValueRef data =
+        LLVMBuildExtractValue(
+            codegen->builder,
+            value,
+            1,
+            "string.data"
+        );
+
+    LLVMValueRef native_length =
+        LLVMBuildIntCast2(
+            codegen->builder,
+            length,
+            size_type,
+            0,
+            "string.native_length"
+        );
+
+    LLVMValueRef fwrite_function =
+        codegen_declare_fwrite(codegen);
+
+    LLVMValueRef stdout_stream =
+        codegen_stdout_stream(codegen);
+
+    if (fwrite_function == NULL || stdout_stream == NULL) {
+        return;
+    }
+
+    LLVMTypeRef fwrite_type = codegen_fwrite_type(codegen);
+
+    LLVMValueRef one =
+        LLVMConstInt(size_type, 1, 0);
+
+    LLVMValueRef string_arguments[] = {
+        data,
+        one,
+        native_length,
+        stdout_stream
+    };
+
+    LLVMBuildCall2(
+        codegen->builder,
+        fwrite_type,
+        fwrite_function,
+        string_arguments,
+        4,
+        ""
+    );
+
+    /* Print the newline separately, including for empty strings. */
+    LLVMValueRef newline =
+        LLVMBuildGlobalStringPtr(
+            codegen->builder,
+            "\n",
+            "newline"
+        );
+
+    LLVMValueRef newline_arguments[] = {
+        newline,
+        one,
+        one,
+        stdout_stream
+    };
+
+    LLVMBuildCall2(
+        codegen->builder,
+        fwrite_type,
+        fwrite_function,
+        newline_arguments,
+        4,
+        ""
+    );
+}
+
 static void codegen_print(
     Codegen *codegen,
     ASTNode *node
@@ -1096,9 +1411,17 @@ static void codegen_print(
             &semantic_type
         )) {
 
-        CODEGEN_ERROR(codegen, "codegen: missing semantic type for print expression\n"
+        CODEGEN_ERROR(
+            codegen,
+            "codegen: missing semantic type for print expression\n"
         );
 
+        return;
+    }
+
+    /* Strings use fwrite so their complete byte length is preserved. */
+    if (semantic_type.kind == SEM_TYPE_STRING) {
+        codegen_print_string(codegen, value);
         return;
     }
 
@@ -1129,7 +1452,9 @@ static void codegen_print(
             break;
 
         default:
-            CODEGEN_ERROR(codegen, "codegen: print type is not supported yet\n"
+            CODEGEN_ERROR(
+                codegen,
+                "codegen: print type is not supported yet\n"
             );
             return;
     }
@@ -1141,7 +1466,7 @@ static void codegen_print(
             "fmt"
         );
 
-    LLVMValueRef args[] = {
+    LLVMValueRef arguments[] = {
         format,
         value
     };
@@ -1150,12 +1475,11 @@ static void codegen_print(
         codegen->builder,
         printf_type,
         printf_function,
-        args,
+        arguments,
         2,
         ""
     );
 }
-
 
 // Return
 static void codegen_return(
