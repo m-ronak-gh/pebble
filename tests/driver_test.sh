@@ -167,6 +167,91 @@ function number main() {
 }
 EOF
 
+# Test 8: --help and -h should print usage successfully
+if "$COMPILER" --help >"$TMP_DIR/log" 2>&1 &&
+    grep -q "Usage:" "$TMP_DIR/log"; then
+    pass "long help option"
+else
+    fail "long help option"
+    cat "$TMP_DIR/log"
+fi
+
+if "$COMPILER" -h >"$TMP_DIR/log" 2>&1 &&
+    grep -q "Usage:" "$TMP_DIR/log"; then
+    pass "short help option"
+else
+    fail "short help option"
+    cat "$TMP_DIR/log"
+fi
+
+# Test 9: missing source and invalid options must be rejected
+if "$COMPILER" >"$TMP_DIR/log" 2>&1; then
+    fail "reject missing command-line arguments"
+else
+    pass "reject missing command-line arguments"
+fi
+
+if "$COMPILER" --unknown >"$TMP_DIR/log" 2>&1; then
+    fail "reject unknown option"
+else
+    pass "reject unknown option"
+fi
+
+if "$COMPILER" build "$TMP_DIR/basic.pb" -o \
+    >"$TMP_DIR/log" 2>&1; then
+    fail "reject missing output path"
+else
+    if grep -q "requires an output path" "$TMP_DIR/log"; then
+        pass "reject missing output path"
+    else
+        fail "missing output path has clear diagnostic"
+        cat "$TMP_DIR/log"
+    fi
+fi
+
+if "$COMPILER" build "$TMP_DIR/basic.pb" -o "$TMP_DIR/extra" extra \
+    >"$TMP_DIR/log" 2>&1; then
+    fail "reject extra command-line argument"
+else
+    pass "reject extra command-line argument"
+fi
+
+# Test 10: a failed rebuild must remove the stale executable
+cat > "$TMP_DIR/rebuild.pb" <<'EOF'
+function number main() {
+    print 123;
+    return 0;
+}
+EOF
+
+if "$COMPILER" build "$TMP_DIR/rebuild.pb" -o "$TMP_DIR/rebuild" \
+    >"$TMP_DIR/log" 2>&1 &&
+    [ -x "$TMP_DIR/rebuild" ]; then
+
+    cat > "$TMP_DIR/rebuild.pb" <<'EOF'
+function number main() {
+    number value true;
+    return 0;
+}
+EOF
+
+    if "$COMPILER" build "$TMP_DIR/rebuild.pb" -o "$TMP_DIR/rebuild" \
+        >"$TMP_DIR/log" 2>&1; then
+        fail "reject invalid rebuild"
+    else
+        pass "reject invalid rebuild"
+    fi
+
+    if [ ! -e "$TMP_DIR/rebuild" ]; then
+        pass "failed rebuild removes stale executable"
+    else
+        fail "failed rebuild leaves stale executable"
+    fi
+else
+    fail "prepare stale executable regression test"
+    cat "$TMP_DIR/log"
+fi
+
 if "$COMPILER" build "$TMP_DIR/string.pb" -o "$TMP_DIR/string" \
     >"$TMP_DIR/log" 2>&1; then
     fail "reject unsupported string printing"
@@ -181,6 +266,109 @@ else
 fi
 
 echo
+
+# FUNCTION_CALL_REGRESSION_TESTS
+
+# Test: parameters, return values, forward calls, and recursion.
+cat > "$TMP_DIR/functions.pb" <<'EOF'
+function number main() {
+    print add(19, 23);
+    print later(5);
+    print factorial(5);
+    return 0;
+}
+
+function number add(number left, number right) {
+    return left + right;
+}
+
+function number later(number value) {
+    return value * 2;
+}
+
+function number factorial(number n) {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+EOF
+
+EXPECTED=$(printf '42\n10\n120')
+if "$COMPILER" build "$TMP_DIR/functions.pb" -o "$TMP_DIR/functions" \
+    >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/functions")" = "$EXPECTED" ]; then
+    pass "function parameters, forward calls, and recursion"
+else
+    fail "function parameters, forward calls, and recursion"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: zero-argument function calls.
+cat > "$TMP_DIR/zero_arg.pb" <<'EOF'
+function number main() {
+    print get_value();
+    return 0;
+}
+
+function number get_value() {
+    return 42;
+}
+EOF
+
+if "$COMPILER" build "$TMP_DIR/zero_arg.pb" -o "$TMP_DIR/zero_arg" \
+    >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/zero_arg")" = "42" ]; then
+    pass "zero-argument function call"
+else
+    fail "zero-argument function call"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: reject incorrect argument count.
+cat > "$TMP_DIR/bad_arg_count.pb" <<'EOF'
+function number main() {
+    print add(10);
+    return 0;
+}
+
+function number add(number a, number b) {
+    return a + b;
+}
+EOF
+
+if ! "$COMPILER" build "$TMP_DIR/bad_arg_count.pb" \
+    -o "$TMP_DIR/bad_arg_count" >"$TMP_DIR/log" 2>&1 &&
+    grep -q "wrong number of arguments" "$TMP_DIR/log" &&
+    [ ! -e "$TMP_DIR/bad_arg_count" ]; then
+    pass "reject incorrect function argument count"
+else
+    fail "reject incorrect function argument count"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: reject incorrect argument types.
+cat > "$TMP_DIR/bad_arg_type.pb" <<'EOF'
+function number main() {
+    print add(true, 10);
+    return 0;
+}
+
+function number add(number a, number b) {
+    return a + b;
+}
+EOF
+
+if ! "$COMPILER" build "$TMP_DIR/bad_arg_type.pb" \
+    -o "$TMP_DIR/bad_arg_type" >"$TMP_DIR/log" 2>&1 &&
+    grep -q "argument type does not match parameter type" "$TMP_DIR/log" &&
+    [ ! -e "$TMP_DIR/bad_arg_type" ]; then
+    pass "reject incorrect function argument type"
+else
+    fail "reject incorrect function argument type"
+    cat "$TMP_DIR/log"
+fi
+
 echo "Driver tests: $PASS passed, $FAIL failed"
 
 [ "$FAIL" -eq 0 ]

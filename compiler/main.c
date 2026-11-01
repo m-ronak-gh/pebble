@@ -17,14 +17,14 @@
 #include "parser/parser.h"
 #include "semantic/semantic.h"
 
-static void usage(const char *program)
+static void usage(const char *program, FILE *stream)
 {
-    (void)program;
-    fprintf(stderr,
+    fprintf(stream,
         "Usage:\n"
-        "  peb <source.pb|source.peb> [--keep-ir]\n"
-        "  peb build <source.pb|source.peb> [-o output]\n"
-        "  peb run <source.pb|source.peb> [-o output]\n");
+        "  %s <source.pb|source.peb> [-o output] [--keep-ir]\n"
+        "  %s build <source.pb|source.peb> [-o output] [--keep-ir]\n"
+        "  %s run <source.pb|source.peb> [-o output] [--keep-ir]\n",
+        program, program, program);
 }
 
 static char *read_file(const char *path)
@@ -236,7 +236,16 @@ static int compile_source(const char *source_path, const char *output_path,
                           int keep_ir)
 {
     char *source = read_file(source_path);
-    if (source == NULL) return 1;
+    if (source == NULL) {
+        return 1;
+    }
+
+    if (remove(output_path) != 0 && errno != ENOENT) {
+        fprintf(stderr, "peb: cannot remove old output '%s': %s\n",
+                output_path, strerror(errno));
+        free(source);
+        return 1;
+    }
 
     Parser parser;
     parser_init(&parser, source);
@@ -265,20 +274,17 @@ static int compile_source(const char *source_path, const char *output_path,
             main_function = node;
             ++main_count;
         }
-        if (node->data.function_decl.parameter_count != 0) {
-            fprintf(stderr,
-                "peb: function '%.*s' has parameters, but parameter code generation is not implemented yet\n",
-                (int)node->data.function_decl.name_length,
-                node->data.function_decl.name);
-            semantic_free(semantic);
-            ast_free(program);
-            free(source);
-            return 1;
-        }
     }
 
     if (main_count != 1 || main_function == NULL) {
         fprintf(stderr, "peb: program must define exactly one function number main()\n");
+        semantic_free(semantic);
+        ast_free(program);
+        free(source);
+        return 1;
+    }
+    if (main_function->data.function_decl.parameter_count != 0) {
+        fprintf(stderr, "peb: entry point main() must not have parameters\n");
         semantic_free(semantic);
         ast_free(program);
         free(source);
@@ -302,10 +308,21 @@ static int compile_source(const char *source_path, const char *output_path,
         return 1;
     }
 
+    /* Pass 1: declare all function signatures. */
     for (size_t i = 0; i < program->data.program.statement_count; ++i) {
         ASTNode *node = program->data.program.statements[i];
         if (node != NULL && node->kind == AST_FUNCTION) {
-            codegen_function(codegen, node);
+            codegen_declare_function(codegen, node);
+        }
+    }
+
+    /* Pass 2: generate function bodies. */
+    if (!codegen_has_error(codegen)) {
+        for (size_t i = 0; i < program->data.program.statement_count; ++i) {
+            ASTNode *node = program->data.program.statements[i];
+            if (node != NULL && node->kind == AST_FUNCTION) {
+                codegen_function(codegen, node);
+            }
         }
     }
 
@@ -368,30 +385,67 @@ int main(int argc, char **argv)
     int keep_ir = 0;
     int index = 1;
 
+    if (argc == 2 &&
+        (strcmp(argv[1], "--help") == 0 ||
+         strcmp(argv[1], "-h") == 0)) {
+        usage(argv[0], stdout);
+        return 0;
+    }
+
     if (argc < 2) {
-        usage(argv[0]);
+        usage(argv[0], stderr);
         return 2;
     }
 
-    if (strcmp(argv[index], "build") == 0 || strcmp(argv[index], "run") == 0) {
+    if (strcmp(argv[index], "build") == 0 ||
+        strcmp(argv[index], "run") == 0) {
         mode = argv[index++];
         if (index >= argc) {
-            usage(argv[0]);
+            fprintf(stderr, "peb: missing source file\n");
+            usage(argv[0], stderr);
             return 2;
         }
     }
     source = argv[index++];
 
+    if (source[0] == '-') {
+        fprintf(stderr, "peb: unknown option '%s'\n", source);
+        usage(argv[0], stderr);
+        return 2;
+    }
+
     while (index < argc) {
-        if (strcmp(argv[index], "-o") == 0 && index + 1 < argc) {
+        if (strcmp(argv[index], "-o") == 0) {
+            if (index + 1 >= argc) {
+                fprintf(stderr,
+                        "peb: option '-o' requires an output path\n");
+                return 2;
+            }
+
+            if (output != NULL) {
+                fprintf(stderr, "peb: option '-o' specified more than once\n");
+                return 2;
+            }
+
             output = argv[index + 1];
+            if (output[0] == '\0') {
+                fprintf(stderr, "peb: output path cannot be empty\n");
+                return 2;
+            }
+
             index += 2;
         } else if (strcmp(argv[index], "--keep-ir") == 0) {
+            if (keep_ir) {
+                fprintf(stderr,
+                        "peb: option '--keep-ir' specified more than once\n");
+                return 2;
+            }
+
             keep_ir = 1;
             ++index;
         } else {
             fprintf(stderr, "peb: unknown argument '%s'\n", argv[index]);
-            usage(argv[0]);
+            usage(argv[0], stderr);
             return 2;
         }
     }
@@ -414,6 +468,7 @@ int main(int argc, char **argv)
             size_t n = strlen(output);
             char *relative = malloc(n + 3);
             if (relative == NULL) {
+                fprintf(stderr, "peb: out of memory preparing executable path\n");
                 free(generated_output);
                 return 1;
             }

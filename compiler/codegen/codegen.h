@@ -58,6 +58,11 @@ LLVMValueRef codegen_expression(
     ASTNode *expression
 );
 
+void codegen_declare_function(
+    Codegen *codegen,
+    ASTNode *function
+);
+
 void codegen_function(
     Codegen *codegen,
     ASTNode *function

@@ -439,6 +439,47 @@ LLVMValueRef codegen_expression(
             );
         }
 
+        case AST_CALL: {
+            ASTNode *callee_node = expression->data.call.callee;
+            if (callee_node == NULL || callee_node->kind != AST_IDENTIFIER) {
+                CODEGEN_ERROR(codegen, "codegen: only direct function calls are supported\n");
+                return NULL;
+            }
+
+            char *name = malloc(callee_node->data.identifier.length + 1);
+            if (name == NULL) {
+                CODEGEN_ERROR(codegen, "fatal: failed to allocate called function name\n");
+                return NULL;
+            }
+            memcpy(name, callee_node->data.identifier.start, callee_node->data.identifier.length);
+            name[callee_node->data.identifier.length] = '\0';
+            LLVMValueRef callee = LLVMGetNamedFunction(codegen->module, name);
+            free(name);
+            if (callee == NULL) {
+                CODEGEN_ERROR(codegen, "codegen: function declaration not found for call\n");
+                return NULL;
+            }
+
+            size_t count = expression->data.call.argument_count;
+            LLVMValueRef *arguments = count ? malloc(count * sizeof(*arguments)) : NULL;
+            if (count && arguments == NULL) {
+                CODEGEN_ERROR(codegen, "fatal: failed to allocate call arguments\n");
+                return NULL;
+            }
+            for (size_t i = 0; i < count; ++i) {
+                arguments[i] = codegen_expression(codegen, expression->data.call.arguments[i]);
+                if (arguments[i] == NULL) { free(arguments); return NULL; }
+            }
+            LLVMTypeRef function_type = LLVMGlobalGetValueType(callee);
+            LLVMTypeRef result_type = LLVMGetReturnType(function_type);
+            LLVMValueRef result = LLVMBuildCall2(
+                codegen->builder, function_type, callee, arguments, (unsigned)count,
+                result_type == LLVMVoidTypeInContext(codegen->context) ? "" : "calltmp"
+            );
+            free(arguments);
+            return result_type == LLVMVoidTypeInContext(codegen->context) ? NULL : result;
+        }
+
         case AST_IDENTIFIER: {
             CodegenVariable *variable =
                 codegen_find_variable(
@@ -1283,88 +1324,141 @@ static LLVMTypeRef codegen_return_type(
     );
 }
 
-void codegen_function(
-    Codegen *codegen,
-    ASTNode *function
-)
+static char *codegen_function_name(ASTNode *function)
 {
-    LLVMTypeRef return_type =
-        codegen_return_type(
-            codegen,
-            function
-        );
+    size_t length = function->data.function_decl.name_length;
+    char *name = malloc(length + 1);
+    if (name == NULL) return NULL;
+    memcpy(name, function->data.function_decl.name, length);
+    name[length] = '\0';
+    return name;
+}
 
-    if (return_type == NULL) {
+void codegen_declare_function(Codegen *codegen, ASTNode *function)
+{
+    if (codegen == NULL || function == NULL || function->kind != AST_FUNCTION) return;
+    char *name = codegen_function_name(function);
+    if (name == NULL) {
+        CODEGEN_ERROR(codegen, "fatal: failed to allocate function name\n");
+        return;
+    }
+    if (LLVMGetNamedFunction(codegen->module, name) != NULL) {
+        free(name);
         return;
     }
 
-    if (function->data.function_decl.parameter_count != 0) {
+    size_t count = function->data.function_decl.parameter_count;
+    LLVMTypeRef *parameter_types = count ? malloc(count * sizeof(*parameter_types)) : NULL;
+    if (count && parameter_types == NULL) {
+        free(name);
+        CODEGEN_ERROR(codegen, "fatal: failed to allocate function parameter types\n");
+        return;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        ASTNode *parameter = function->data.function_decl.parameters[i];
+        if (parameter == NULL || parameter->kind != AST_VAR_DECL) {
+            CODEGEN_ERROR(codegen, "codegen: malformed function parameter\n");
+            free(parameter_types); free(name); return;
+        }
+        parameter_types[i] = llvm_type_from_ast(codegen, parameter->data.var_decl.type);
+        if (parameter_types[i] == NULL || parameter->data.var_decl.type.dimension_count != 0) {
+            if (parameter_types[i] != NULL)
+                CODEGEN_ERROR(codegen, "codegen: array parameters are not supported yet\n");
+            free(parameter_types); free(name); return;
+        }
+    }
+    LLVMTypeRef return_type = codegen_return_type(codegen, function);
+    if (return_type != NULL) {
+        LLVMTypeRef function_type = LLVMFunctionType(return_type, parameter_types, (unsigned)count, 0);
+        LLVMAddFunction(codegen->module, name, function_type);
+    }
+    free(parameter_types);
+    free(name);
+}
 
-        CODEGEN_ERROR(codegen, "codegen: function parameters not supported yet\n"
-        );
+void codegen_function(Codegen *codegen, ASTNode *function)
+{
+    if (codegen == NULL || function == NULL || function->kind != AST_FUNCTION) return;
+    codegen_declare_function(codegen, function);
+    if (codegen->has_error) return;
 
+    char *name = codegen_function_name(function);
+    if (name == NULL) {
+        CODEGEN_ERROR(codegen, "fatal: failed to allocate function name\n");
+        return;
+    }
+    LLVMValueRef llvm_function = LLVMGetNamedFunction(codegen->module, name);
+    free(name);
+    if (llvm_function == NULL) {
+        CODEGEN_ERROR(codegen, "codegen: function declaration missing\n");
+        return;
+    }
+    /* A declaration may be visited in the body pass only once. */
+    if (LLVMCountBasicBlocks(llvm_function) != 0) {
+        CODEGEN_ERROR(codegen, "codegen: function body generated more than once\n");
         return;
     }
 
-    LLVMTypeRef function_type =
-        LLVMFunctionType(
-            return_type,
-            NULL,
-            0,
-            0
-        );
-
-    char *function_name =
-        malloc(
-            function->data.function_decl.name_length + 1
-        );
-
-    if (function_name == NULL) {
-        CODEGEN_ERROR(codegen,
-            "fatal: failed to allocate function name\n");
-        return;
-    }
-
-    memcpy(
-        function_name,
-        function->data.function_decl.name,
-        function->data.function_decl.name_length
-    );
-
-    function_name[
-        function->data.function_decl.name_length
-    ] = '\0';
-
-    LLVMValueRef llvm_function =
-        LLVMAddFunction(
-            codegen->module,
-            function_name,
-            function_type
-        );
-
-    free(function_name);
-
-    codegen->current_function =
-        llvm_function;
-
+    codegen->current_function = llvm_function;
     codegen_free_variables(codegen);
+    LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(codegen->context, llvm_function, "entry");
+    LLVMPositionBuilderAtEnd(codegen->builder, entry);
 
-    LLVMBasicBlockRef entry =
-        LLVMAppendBasicBlockInContext(
-            codegen->context,
-            llvm_function,
-            "entry"
-        );
+    size_t count = function->data.function_decl.parameter_count;
+    for (size_t i = 0; i < count; ++i) {
+        ASTNode *parameter = function->data.function_decl.parameters[i];
+        const char *source_name = parameter->data.var_decl.name;
+        size_t length = parameter->data.var_decl.name_length;
+        char *parameter_name = malloc(length + 1);
+        CodegenVariable *variable = malloc(sizeof(*variable));
+        if (parameter_name == NULL || variable == NULL) {
+            free(parameter_name); free(variable);
+            CODEGEN_ERROR(codegen, "fatal: failed to allocate parameter storage\n");
+            return;
+        }
+        memcpy(parameter_name, source_name, length);
+        parameter_name[length] = '\0';
+        LLVMValueRef alloca = LLVMBuildAlloca(codegen->builder,
+            LLVMTypeOf(LLVMGetParam(llvm_function, (unsigned)i)), parameter_name);
+        LLVMBuildStore(codegen->builder, LLVMGetParam(llvm_function, (unsigned)i), alloca);
 
-    LLVMPositionBuilderAtEnd(
-        codegen->builder,
-        entry
-    );
+        memset(&variable->type, 0, sizeof(variable->type));
+        switch (parameter->data.var_decl.type.kind) {
+            case AST_TYPE_NUMBER:
+                variable->type.kind = SEM_TYPE_NUMBER;
+                break;
 
-    codegen_block(
-        codegen,
-        function->data.function_decl.body
-    );
+            case AST_TYPE_DECIMAL:
+                variable->type.kind = SEM_TYPE_DECIMAL;
+                break;
+
+            case AST_TYPE_BOOL:
+                variable->type.kind = SEM_TYPE_BOOL;
+                break;
+
+            case AST_TYPE_CHAR:
+                variable->type.kind = SEM_TYPE_CHAR;
+                break;
+
+            case AST_TYPE_STRING:
+                variable->type.kind = SEM_TYPE_STRING;
+                break;
+
+            default:
+                free(parameter_name);
+                free(variable);
+                CODEGEN_ERROR(codegen,
+                    "codegen: unsupported parameter type\n");
+                return;
+        }
+        variable->name = parameter_name;
+        variable->alloca = alloca;
+        variable->storage_type = LLVMTypeOf(LLVMGetParam(llvm_function, (unsigned)i));
+        variable->next = codegen->variables;
+        codegen->variables = variable;
+    }
+
+    codegen_block(codegen, function->data.function_decl.body);
 }
 
 static void codegen_if(
