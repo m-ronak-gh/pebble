@@ -44,6 +44,23 @@ static LLVMValueRef codegen_builtin_free(
     ASTNode *expression
 );
 
+static LLVMValueRef codegen_lvalue_pointer(
+    Codegen *codegen,
+    ASTNode *node,
+    LLVMTypeRef *out_type
+);
+
+static CodegenStructDef *codegen_find_struct(
+    const Codegen *codegen,
+    const char *name,
+    size_t length
+);
+
+static void codegen_panic(
+    Codegen *codegen,
+    LLVMValueRef msg_val
+);
+
 static void codegen_repeat(Codegen *codegen, ASTNode *node);
 static void codegen_for(Codegen *codegen, ASTNode *node);
 
@@ -93,6 +110,10 @@ static LLVMValueRef codegen_declare_printf(
 );
 
 static LLVMTypeRef codegen_printf_type(
+    Codegen *codegen
+);
+
+static LLVMTypeRef codegen_size_t_type(
     Codegen *codegen
 );
 
@@ -159,7 +180,20 @@ Codegen *codegen_create(
     codegen->current_function = NULL;
     codegen->variables = NULL;
     codegen->current_loop = NULL;
+    codegen->structs = NULL;
     codegen->has_error = 0;
+
+    if (codegen->semantic != NULL) {
+        const ASTNode *prog = semantic_get_program(codegen->semantic);
+        if (prog != NULL && prog->kind == AST_PROGRAM) {
+            for (size_t i = 0; i < prog->data.program.statement_count; ++i) {
+                ASTNode *stmt = prog->data.program.statements[i];
+                if (stmt != NULL && stmt->kind == AST_STRUCT) {
+                    codegen_declare_struct(codegen, stmt);
+                }
+            }
+        }
+    }
 
     return codegen;
 }
@@ -176,6 +210,14 @@ void codegen_free(Codegen *codegen)
     }
 
     codegen_free_variables(codegen);
+
+    CodegenStructDef *s = codegen->structs;
+    while (s != NULL) {
+        CodegenStructDef *next = s->next;
+        free(s->name);
+        free(s);
+        s = next;
+    }
 
     LLVMDisposeBuilder(codegen->builder);
     LLVMDisposeModule(codegen->module);
@@ -275,6 +317,83 @@ static LLVMTypeRef llvm_char_type(
     );
 }
 
+static CodegenStructDef *codegen_find_struct(
+    const Codegen *codegen,
+    const char *name,
+    size_t length
+)
+{
+    if (codegen == NULL || name == NULL) return NULL;
+    for (CodegenStructDef *s = codegen->structs; s != NULL; s = s->next) {
+        if (s->name_length == length && memcmp(s->name, name, length) == 0) {
+            return s;
+        }
+    }
+    return NULL;
+}
+
+LLVMTypeRef codegen_declare_struct(
+    Codegen *codegen,
+    const ASTNode *struct_node
+)
+{
+    if (codegen == NULL || struct_node == NULL || struct_node->kind != AST_STRUCT) {
+        return NULL;
+    }
+
+    const char *sname = struct_node->data.struct_decl.name;
+    size_t slen = struct_node->data.struct_decl.name_length;
+
+    CodegenStructDef *existing = codegen_find_struct(codegen, sname, slen);
+    if (existing != NULL) {
+        return existing->llvm_type;
+    }
+
+    char *name = malloc(slen + 1);
+    if (name == NULL) {
+        CODEGEN_ERROR(codegen, "fatal: failed to allocate struct name\n");
+        return NULL;
+    }
+    memcpy(name, sname, slen);
+    name[slen] = '\0';
+
+    LLVMTypeRef struct_type = LLVMStructCreateNamed(codegen->context, name);
+
+    CodegenStructDef *sdef = malloc(sizeof(CodegenStructDef));
+    if (sdef == NULL) {
+        free(name);
+        CODEGEN_ERROR(codegen, "fatal: failed to allocate struct def\n");
+        return NULL;
+    }
+    sdef->name = name;
+    sdef->name_length = slen;
+    sdef->llvm_type = struct_type;
+    sdef->decl = struct_node;
+    sdef->next = codegen->structs;
+    codegen->structs = sdef;
+
+    size_t field_count = struct_node->data.struct_decl.field_count;
+    LLVMTypeRef *field_types = field_count ? malloc(field_count * sizeof(LLVMTypeRef)) : NULL;
+    if (field_count > 0 && field_types == NULL) {
+        CODEGEN_ERROR(codegen, "fatal: failed to allocate struct field types\n");
+        return NULL;
+    }
+
+    for (size_t i = 0; i < field_count; ++i) {
+        ASTNode *field = struct_node->data.struct_decl.fields[i];
+        field_types[i] = llvm_type_from_ast(codegen, field->data.var_decl.type);
+        if (field_types[i] == NULL) {
+            free(field_types);
+            return NULL;
+        }
+    }
+
+    LLVMStructSetBody(struct_type, field_types, (unsigned)field_count, 0);
+    free(field_types);
+
+    return struct_type;
+}
+
 static LLVMTypeRef llvm_type_from_ast(
     Codegen *codegen,
     ASTType type
@@ -312,11 +431,29 @@ static LLVMTypeRef llvm_type_from_ast(
             element_type = codegen->string_type;
             break;
 
-        case AST_TYPE_USER:
-            CODEGEN_ERROR(codegen, "codegen: unsupported declaration type kind %d\n",
-                type.kind
+        case AST_TYPE_USER: {
+            if (codegen->semantic != NULL &&
+                semantic_lookup_enum(codegen->semantic, type.name, type.name_length) != NULL) {
+                element_type = llvm_number_type(codegen);
+                break;
+            }
+            CodegenStructDef *sdef = codegen_find_struct(codegen, type.name, type.name_length);
+            if (sdef != NULL) {
+                element_type = sdef->llvm_type;
+                break;
+            }
+            if (codegen->semantic != NULL) {
+                const ASTNode *snode = semantic_lookup_struct(codegen->semantic, type.name, type.name_length);
+                if (snode != NULL) {
+                    element_type = codegen_declare_struct(codegen, snode);
+                    break;
+                }
+            }
+            CODEGEN_ERROR(codegen, "codegen: unknown user type '%.*s'\n",
+                (int)type.name_length, type.name != NULL ? type.name : ""
             );
             return NULL;
+        }
     }
 
     if (element_type == NULL) {
@@ -413,13 +550,12 @@ static void codegen_free_variables(
     codegen->variables = NULL;
 }
 
-static LLVMValueRef codegen_string_literal(
+static LLVMValueRef codegen_string_constant(
     Codegen *codegen,
-    ASTNode *expression
+    const char *chars,
+    size_t length
 )
 {
-    size_t length = expression->data.string.length;
-
     if (length > UINT_MAX) {
         CODEGEN_ERROR(
             codegen,
@@ -452,7 +588,7 @@ static LLVMValueRef codegen_string_literal(
     LLVMValueRef string_data =
         LLVMConstStringInContext(
             codegen->context,
-            expression->data.string.start,
+            chars,
             (unsigned)length,
             0
         );
@@ -505,6 +641,171 @@ static LLVMValueRef codegen_string_literal(
     );
 }
 
+static LLVMValueRef codegen_string_literal(
+    Codegen *codegen,
+    ASTNode *expression
+)
+{
+    return codegen_string_constant(
+        codegen,
+        expression->data.string.start,
+        expression->data.string.length
+    );
+}
+
+static void codegen_panic(Codegen *codegen, LLVMValueRef msg_val)
+{
+    LLVMValueRef printf_func = codegen_declare_printf(codegen);
+    LLVMTypeRef printf_type = codegen_printf_type(codegen);
+
+    LLVMValueRef fmt = LLVMBuildGlobalStringPtr(
+        codegen->builder,
+        "panic: %.*s\n",
+        "panic.fmt"
+    );
+
+    LLVMValueRef length = LLVMBuildExtractValue(
+        codegen->builder,
+        msg_val,
+        0,
+        "panic.len"
+    );
+    LLVMValueRef data = LLVMBuildExtractValue(
+        codegen->builder,
+        msg_val,
+        1,
+        "panic.data"
+    );
+
+    LLVMValueRef len32 = LLVMBuildTrunc(
+        codegen->builder,
+        length,
+        LLVMInt32TypeInContext(codegen->context),
+        "panic.len32"
+    );
+
+    LLVMValueRef args[] = { fmt, len32, data };
+    LLVMBuildCall2(codegen->builder, printf_type, printf_func, args, 3, "");
+
+    LLVMValueRef one = LLVMConstInt(
+        LLVMInt32TypeInContext(codegen->context),
+        1,
+        0
+    );
+    LLVMTypeRef exit_param = LLVMInt32TypeInContext(codegen->context);
+    LLVMTypeRef exit_fn_type = LLVMFunctionType(
+        LLVMVoidTypeInContext(codegen->context),
+        &exit_param,
+        1,
+        0
+    );
+    LLVMValueRef exit_fn = LLVMGetNamedFunction(codegen->module, "exit");
+    if (exit_fn == NULL) {
+        exit_fn = LLVMAddFunction(codegen->module, "exit", exit_fn_type);
+    }
+    LLVMBuildCall2(codegen->builder, exit_fn_type, exit_fn, &one, 1, "");
+    LLVMBuildUnreachable(codegen->builder);
+}
+
+static LLVMValueRef codegen_string_equality(
+    Codegen *codegen,
+    LLVMValueRef left,
+    LLVMValueRef right,
+    int is_not_equal
+)
+{
+    LLVMValueRef len1 = LLVMBuildExtractValue(codegen->builder, left, 0, "len1");
+    LLVMValueRef len2 = LLVMBuildExtractValue(codegen->builder, right, 0, "len2");
+    LLVMValueRef data1 = LLVMBuildExtractValue(codegen->builder, left, 1, "data1");
+    LLVMValueRef data2 = LLVMBuildExtractValue(codegen->builder, right, 1, "data2");
+
+    LLVMValueRef len_match = LLVMBuildICmp(
+        codegen->builder,
+        LLVMIntEQ,
+        len1,
+        len2,
+        "len.match"
+    );
+
+    LLVMBasicBlockRef cur_block = LLVMGetInsertBlock(codegen->builder);
+    LLVMBasicBlockRef check_bytes = LLVMAppendBasicBlockInContext(
+        codegen->context,
+        codegen->current_function,
+        "streq.bytes"
+    );
+    LLVMBasicBlockRef merge_block = LLVMAppendBasicBlockInContext(
+        codegen->context,
+        codegen->current_function,
+        "streq.merge"
+    );
+
+    LLVMBuildCondBr(codegen->builder, len_match, check_bytes, merge_block);
+
+    LLVMPositionBuilderAtEnd(codegen->builder, check_bytes);
+    LLVMTypeRef size_type = codegen_size_t_type(codegen);
+    LLVMValueRef len_native = LLVMBuildIntCast2(
+        codegen->builder,
+        len1,
+        size_type,
+        0,
+        "len.native"
+    );
+
+    LLVMTypeRef ptr_type = LLVMPointerType(LLVMInt8TypeInContext(codegen->context), 0);
+    LLVMTypeRef memcmp_params[] = { ptr_type, ptr_type, size_type };
+    LLVMTypeRef memcmp_type = LLVMFunctionType(
+        LLVMInt32TypeInContext(codegen->context),
+        memcmp_params,
+        3,
+        0
+    );
+    LLVMValueRef memcmp_fn = LLVMGetNamedFunction(codegen->module, "memcmp");
+    if (memcmp_fn == NULL) {
+        memcmp_fn = LLVMAddFunction(codegen->module, "memcmp", memcmp_type);
+    }
+    LLVMValueRef memcmp_args[] = { data1, data2, len_native };
+    LLVMValueRef cmp_res = LLVMBuildCall2(
+        codegen->builder,
+        memcmp_type,
+        memcmp_fn,
+        memcmp_args,
+        3,
+        "memcmp.res"
+    );
+    LLVMValueRef bytes_match = LLVMBuildICmp(
+        codegen->builder,
+        LLVMIntEQ,
+        cmp_res,
+        LLVMConstInt(LLVMInt32TypeInContext(codegen->context), 0, 0),
+        "bytes.match"
+    );
+    LLVMBasicBlockRef bytes_end_block = LLVMGetInsertBlock(codegen->builder);
+    LLVMBuildBr(codegen->builder, merge_block);
+
+    LLVMPositionBuilderAtEnd(codegen->builder, merge_block);
+    LLVMValueRef phi = LLVMBuildPhi(
+        codegen->builder,
+        llvm_bool_type(codegen),
+        "streq.result"
+    );
+    LLVMValueRef vals[] = {
+        LLVMConstInt(llvm_bool_type(codegen), 0, 0),
+        bytes_match
+    };
+    LLVMBasicBlockRef blks[] = { cur_block, bytes_end_block };
+    LLVMAddIncoming(phi, vals, blks, 2);
+
+    if (is_not_equal) {
+        return LLVMBuildXor(
+            codegen->builder,
+            phi,
+            LLVMConstInt(llvm_bool_type(codegen), 1, 0),
+            "strne.result"
+        );
+    }
+    return phi;
+}
+
 // Expressions
 LLVMValueRef codegen_expression(
     Codegen *codegen,
@@ -551,6 +852,9 @@ LLVMValueRef codegen_expression(
                 0
             );
 
+        case AST_NULL_LITERAL:
+            return LLVMConstNull(codegen->string_type);
+
         case AST_INDEX: {
             LLVMTypeRef element_type = NULL;
 
@@ -570,6 +874,20 @@ LLVMValueRef codegen_expression(
                 element_type,
                 element_pointer,
                 "array.element"
+            );
+        }
+
+        case AST_MEMBER_ACCESS: {
+            LLVMTypeRef val_type = NULL;
+            LLVMValueRef ptr = codegen_lvalue_pointer(codegen, expression, &val_type);
+            if (ptr == NULL || val_type == NULL) {
+                return NULL;
+            }
+            return LLVMBuildLoad2(
+                codegen->builder,
+                val_type,
+                ptr,
+                "member.load"
             );
         }
 
@@ -598,6 +916,105 @@ LLVMValueRef codegen_expression(
                 ) == 0) {
 
                 return codegen_builtin_free(codegen, expression);
+            }
+
+            if (callee_node->data.identifier.length == 6 &&
+                memcmp(callee_node->data.identifier.start, "length", 6) == 0) {
+                if (expression->data.call.argument_count != 1) {
+                    CODEGEN_ERROR(codegen, "codegen: length() expects 1 argument\n");
+                    return NULL;
+                }
+                ASTNode *arg = expression->data.call.arguments[0];
+                SemanticType sem_type;
+                if (codegen->semantic == NULL ||
+                    !semantic_type_of(codegen->semantic, arg, &sem_type)) {
+                    CODEGEN_ERROR(codegen, "codegen: missing semantic type for length argument\n");
+                    return NULL;
+                }
+                if (sem_type.kind == SEM_TYPE_STRING) {
+                    LLVMValueRef str_val = codegen_expression(codegen, arg);
+                    if (str_val == NULL) return NULL;
+                    return LLVMBuildExtractValue(codegen->builder, str_val, 0, "string.len");
+                } else if (sem_type.array_dimension_count > 0) {
+                    return LLVMConstInt(llvm_number_type(codegen), (unsigned long long)sem_type.array_lengths[0], 1);
+                }
+                CODEGEN_ERROR(codegen, "codegen: length() expects string or array argument\n");
+                return NULL;
+            }
+
+            if (callee_node->data.identifier.length == 6 &&
+                memcmp(callee_node->data.identifier.start, "typeof", 6) == 0) {
+                if (expression->data.call.argument_count != 1) {
+                    CODEGEN_ERROR(codegen, "codegen: typeof() expects 1 argument\n");
+                    return NULL;
+                }
+                SemanticType sem_type;
+                if (codegen->semantic == NULL ||
+                    !semantic_type_of(codegen->semantic, expression->data.call.arguments[0], &sem_type)) {
+                    CODEGEN_ERROR(codegen, "codegen: missing semantic type for typeof\n");
+                    return NULL;
+                }
+                if ((sem_type.kind == SEM_TYPE_STRUCT || sem_type.kind == SEM_TYPE_ENUM) && sem_type.name != NULL) {
+                    return codegen_string_constant(codegen, sem_type.name, sem_type.name_length);
+                }
+                const char *tname = semantic_type_name(sem_type.kind);
+                return codegen_string_constant(codegen, tname, strlen(tname));
+            }
+
+            if (callee_node->data.identifier.length == 4 &&
+                memcmp(callee_node->data.identifier.start, "exit", 4) == 0) {
+                if (expression->data.call.argument_count != 1) {
+                    CODEGEN_ERROR(codegen, "codegen: exit() expects 1 argument\n");
+                    return NULL;
+                }
+                LLVMValueRef code_val = codegen_expression(codegen, expression->data.call.arguments[0]);
+                if (code_val == NULL) return NULL;
+                LLVMValueRef code32 = LLVMBuildTrunc(codegen->builder, code_val, LLVMInt32TypeInContext(codegen->context), "exit.code");
+                LLVMTypeRef exit_param = LLVMInt32TypeInContext(codegen->context);
+                LLVMTypeRef exit_fn_type = LLVMFunctionType(LLVMVoidTypeInContext(codegen->context), &exit_param, 1, 0);
+                LLVMValueRef exit_fn = LLVMGetNamedFunction(codegen->module, "exit");
+                if (exit_fn == NULL) {
+                    exit_fn = LLVMAddFunction(codegen->module, "exit", exit_fn_type);
+                }
+                LLVMBuildCall2(codegen->builder, exit_fn_type, exit_fn, &code32, 1, "");
+                LLVMBuildUnreachable(codegen->builder);
+                return NULL;
+            }
+
+            if (callee_node->data.identifier.length == 5 &&
+                memcmp(callee_node->data.identifier.start, "panic", 5) == 0) {
+                if (expression->data.call.argument_count != 1) {
+                    CODEGEN_ERROR(codegen, "codegen: panic() expects 1 argument\n");
+                    return NULL;
+                }
+                LLVMValueRef msg_val = codegen_expression(codegen, expression->data.call.arguments[0]);
+                if (msg_val == NULL) return NULL;
+                codegen_panic(codegen, msg_val);
+                return NULL;
+            }
+
+            if (callee_node->data.identifier.length == 6 &&
+                memcmp(callee_node->data.identifier.start, "assert", 6) == 0) {
+                if (expression->data.call.argument_count != 2) {
+                    CODEGEN_ERROR(codegen, "codegen: assert() expects 2 arguments\n");
+                    return NULL;
+                }
+                LLVMValueRef cond = codegen_expression(codegen, expression->data.call.arguments[0]);
+                if (cond == NULL) return NULL;
+                LLVMBasicBlockRef pass_block = LLVMAppendBasicBlockInContext(codegen->context, codegen->current_function, "assert.pass");
+                LLVMBasicBlockRef fail_block = LLVMAppendBasicBlockInContext(codegen->context, codegen->current_function, "assert.fail");
+                LLVMBuildCondBr(codegen->builder, cond, pass_block, fail_block);
+
+                LLVMPositionBuilderAtEnd(codegen->builder, fail_block);
+                LLVMValueRef msg_val = codegen_expression(codegen, expression->data.call.arguments[1]);
+                if (msg_val != NULL) {
+                    codegen_panic(codegen, msg_val);
+                } else {
+                    LLVMBuildUnreachable(codegen->builder);
+                }
+
+                LLVMPositionBuilderAtEnd(codegen->builder, pass_block);
+                return NULL;
             }
 
             char *name = malloc(callee_node->data.identifier.length + 1);
@@ -642,27 +1059,41 @@ LLVMValueRef codegen_expression(
                     expression->data.identifier.length
                 );
 
-            if (variable == NULL) {
-                CODEGEN_ERROR(codegen, "codegen: undefined variable '%.*s'\n",
-                    (int)expression->data.identifier.length,
-                    expression->data.identifier.start
+            if (variable != NULL) {
+                LLVMTypeRef type = variable->storage_type;
+                if (type == NULL) {
+                    return NULL;
+                }
+
+                return LLVMBuildLoad2(
+                    codegen->builder,
+                    type,
+                    variable->alloca,
+                    "loadtmp"
                 );
-
-                return NULL;
             }
 
-            LLVMTypeRef type = variable->storage_type;
-
-            if (type == NULL) {
-                return NULL;
+            long long enum_value = 0;
+            if (codegen->semantic != NULL &&
+                semantic_lookup_enum_member(
+                    codegen->semantic,
+                    expression->data.identifier.start,
+                    expression->data.identifier.length,
+                    &enum_value
+                )) {
+                return LLVMConstInt(
+                    llvm_number_type(codegen),
+                    (unsigned long long)enum_value,
+                    1
+                );
             }
 
-            return LLVMBuildLoad2(
-                codegen->builder,
-                type,
-                variable->alloca,
-                "loadtmp"
+            CODEGEN_ERROR(codegen, "codegen: undefined variable '%.*s'\n",
+                (int)expression->data.identifier.length,
+                expression->data.identifier.start
             );
+
+            return NULL;
         }
 
         case AST_UNARY: {
@@ -681,6 +1112,13 @@ LLVMValueRef codegen_expression(
             ) {
 
                 case AST_UNARY_NEGATE:
+                    if (LLVMGetTypeKind(LLVMTypeOf(operand)) == LLVMDoubleTypeKind) {
+                        return LLVMBuildFNeg(
+                            codegen->builder,
+                            operand,
+                            "fnegtmp"
+                        );
+                    }
                     return LLVMBuildNeg(
                         codegen->builder,
                         operand,
@@ -714,6 +1152,50 @@ LLVMValueRef codegen_expression(
         }
 
         case AST_BINARY: {
+            if (expression->data.binary.operator == AST_BINARY_LOGICAL_AND) {
+                LLVMValueRef left = codegen_expression(codegen, expression->data.binary.left);
+                if (left == NULL) return NULL;
+                LLVMBasicBlockRef left_block = LLVMGetInsertBlock(codegen->builder);
+                LLVMBasicBlockRef rhs_block = LLVMAppendBasicBlockInContext(codegen->context, codegen->current_function, "and.rhs");
+                LLVMBasicBlockRef merge_block = LLVMAppendBasicBlockInContext(codegen->context, codegen->current_function, "and.end");
+                LLVMBuildCondBr(codegen->builder, left, rhs_block, merge_block);
+
+                LLVMPositionBuilderAtEnd(codegen->builder, rhs_block);
+                LLVMValueRef right = codegen_expression(codegen, expression->data.binary.right);
+                if (right == NULL) return NULL;
+                LLVMBasicBlockRef rhs_end_block = LLVMGetInsertBlock(codegen->builder);
+                LLVMBuildBr(codegen->builder, merge_block);
+
+                LLVMPositionBuilderAtEnd(codegen->builder, merge_block);
+                LLVMValueRef phi = LLVMBuildPhi(codegen->builder, llvm_bool_type(codegen), "and.result");
+                LLVMValueRef incoming_values[] = { LLVMConstInt(llvm_bool_type(codegen), 0, 0), right };
+                LLVMBasicBlockRef incoming_blocks[] = { left_block, rhs_end_block };
+                LLVMAddIncoming(phi, incoming_values, incoming_blocks, 2);
+                return phi;
+            }
+
+            if (expression->data.binary.operator == AST_BINARY_LOGICAL_OR) {
+                LLVMValueRef left = codegen_expression(codegen, expression->data.binary.left);
+                if (left == NULL) return NULL;
+                LLVMBasicBlockRef left_block = LLVMGetInsertBlock(codegen->builder);
+                LLVMBasicBlockRef rhs_block = LLVMAppendBasicBlockInContext(codegen->context, codegen->current_function, "or.rhs");
+                LLVMBasicBlockRef merge_block = LLVMAppendBasicBlockInContext(codegen->context, codegen->current_function, "or.end");
+                LLVMBuildCondBr(codegen->builder, left, merge_block, rhs_block);
+
+                LLVMPositionBuilderAtEnd(codegen->builder, rhs_block);
+                LLVMValueRef right = codegen_expression(codegen, expression->data.binary.right);
+                if (right == NULL) return NULL;
+                LLVMBasicBlockRef rhs_end_block = LLVMGetInsertBlock(codegen->builder);
+                LLVMBuildBr(codegen->builder, merge_block);
+
+                LLVMPositionBuilderAtEnd(codegen->builder, merge_block);
+                LLVMValueRef phi = LLVMBuildPhi(codegen->builder, llvm_bool_type(codegen), "or.result");
+                LLVMValueRef incoming_values[] = { LLVMConstInt(llvm_bool_type(codegen), 1, 0), right };
+                LLVMBasicBlockRef incoming_blocks[] = { left_block, rhs_end_block };
+                LLVMAddIncoming(phi, incoming_values, incoming_blocks, 2);
+                return phi;
+            }
+
             LLVMValueRef left =
                 codegen_expression(
                     codegen,
@@ -841,12 +1323,40 @@ LLVMValueRef codegen_expression(
                         right,
                         "modtmp"
                     );
+
+                case AST_BINARY_BITWISE_AND:
+                    return LLVMBuildAnd(codegen->builder, left, right, "andtmp");
+
+                case AST_BINARY_BITWISE_OR:
+                    return LLVMBuildOr(codegen->builder, left, right, "ortmp");
+
+                case AST_BINARY_BITWISE_XOR:
+                    return LLVMBuildXor(codegen->builder, left, right, "xortmp");
+
+                case AST_BINARY_SHIFT_LEFT:
+                    return LLVMBuildShl(codegen->builder, left, right, "shltmp");
+
+                case AST_BINARY_SHIFT_RIGHT:
+                    return LLVMBuildAShr(codegen->builder, left, right, "ashrtmp");
+
                 case AST_BINARY_EQUAL:
                 case AST_BINARY_NOT_EQUAL:
                 case AST_BINARY_LESS:
                 case AST_BINARY_LESS_EQUAL:
                 case AST_BINARY_GREATER:
                 case AST_BINARY_GREATER_EQUAL: {
+                    if (left_type.kind == SEM_TYPE_STRING) {
+                        if (expression->data.binary.operator == AST_BINARY_EQUAL ||
+                            expression->data.binary.operator == AST_BINARY_NOT_EQUAL) {
+                            return codegen_string_equality(
+                                codegen,
+                                left,
+                                right,
+                                expression->data.binary.operator == AST_BINARY_NOT_EQUAL
+                            );
+                        }
+                    }
+
                     int is_decimal =
                         left_type.kind == SEM_TYPE_DECIMAL;
 
@@ -1000,7 +1510,7 @@ static void codegen_variable_declaration(
         if (initializer == NULL) {
             return;
         }
-    } else if (ast_type.dimension_count == 0) {
+    } else if (ast_type.dimension_count == 0 && ast_type.kind != AST_TYPE_USER) {
         CODEGEN_ERROR(codegen, "codegen: scalar variable requires an initializer\n"
         );
         return;
@@ -1086,6 +1596,18 @@ static void codegen_variable_declaration(
             case AST_TYPE_CHAR:
                 variable->type.kind = SEM_TYPE_CHAR;
                 break;
+            case AST_TYPE_USER:
+                if (codegen->semantic != NULL &&
+                    semantic_lookup_enum(codegen->semantic, ast_type.name, ast_type.name_length) != NULL) {
+                    variable->type.kind = SEM_TYPE_ENUM;
+                    variable->type.name = ast_type.name;
+                    variable->type.name_length = ast_type.name_length;
+                } else {
+                    variable->type.kind = SEM_TYPE_STRUCT;
+                    variable->type.name = ast_type.name;
+                    variable->type.name_length = ast_type.name_length;
+                }
+                break;
             default:
                 CODEGEN_ERROR(codegen, "codegen: unsupported uninitialized variable type\n"
                 );
@@ -1116,41 +1638,14 @@ static void codegen_assignment(
         return;
     }
 
-    LLVMValueRef target_pointer = NULL;
     LLVMTypeRef expected_type = NULL;
+    LLVMValueRef target_pointer = codegen_lvalue_pointer(
+        codegen,
+        target,
+        &expected_type
+    );
 
-    if (target->kind == AST_IDENTIFIER) {
-        CodegenVariable *variable = codegen_find_variable(
-            codegen,
-            target->data.identifier.start,
-            target->data.identifier.length
-        );
-
-        if (variable == NULL || variable->storage_type == NULL) {
-            CODEGEN_ERROR(codegen, "codegen: unknown variable in assignment '%.*s'\n",
-                (int)target->data.identifier.length,
-                target->data.identifier.start
-            );
-            return;
-        }
-
-        target_pointer = variable->alloca;
-        expected_type = variable->storage_type;
-
-    } else if (target->kind == AST_INDEX) {
-        target_pointer = codegen_array_element_pointer(
-            codegen,
-            target,
-            &expected_type
-        );
-
-        if (target_pointer == NULL || expected_type == NULL) {
-            return;
-        }
-
-    } else {
-        CODEGEN_ERROR(codegen, "codegen: unsupported assignment target\n"
-        );
+    if (target_pointer == NULL || expected_type == NULL) {
         return;
     }
 
@@ -1677,6 +2172,7 @@ static void codegen_print(
     switch (semantic_type.kind) {
 
         case SEM_TYPE_NUMBER:
+        case SEM_TYPE_ENUM:
             format_text = "%lld\n";
             break;
 
@@ -1729,10 +2225,7 @@ static void codegen_return(
 )
 {
     if (node->data.return_stmt.expression == NULL) {
-
-        CODEGEN_ERROR(codegen, "codegen: return without value is not supported yet\n"
-        );
-
+        LLVMBuildRetVoid(codegen->builder);
         return;
     }
 
@@ -2009,6 +2502,21 @@ void codegen_function(Codegen *codegen, ASTNode *function)
                 variable->type.kind = SEM_TYPE_STRING;
                 break;
 
+            case AST_TYPE_USER: {
+                ASTType ptype = parameter->data.var_decl.type;
+                if (codegen->semantic != NULL &&
+                    semantic_lookup_enum(codegen->semantic, ptype.name, ptype.name_length) != NULL) {
+                    variable->type.kind = SEM_TYPE_ENUM;
+                    variable->type.name = ptype.name;
+                    variable->type.name_length = ptype.name_length;
+                } else {
+                    variable->type.kind = SEM_TYPE_STRUCT;
+                    variable->type.name = ptype.name;
+                    variable->type.name_length = ptype.name_length;
+                }
+                break;
+            }
+
             default:
                 free(parameter_name);
                 free(variable);
@@ -2024,6 +2532,19 @@ void codegen_function(Codegen *codegen, ASTNode *function)
     }
 
     codegen_block(codegen, function->data.function_decl.body);
+
+    LLVMBasicBlockRef current_block = LLVMGetInsertBlock(codegen->builder);
+    if (current_block != NULL && LLVMGetBasicBlockTerminator(current_block) == NULL) {
+        if (function->data.function_decl.return_type.kind == AST_TYPE_VOID &&
+            function->data.function_decl.return_type.dimension_count == 0) {
+            LLVMBuildRetVoid(codegen->builder);
+        } else {
+            LLVMTypeRef ret_type = codegen_return_type(codegen, function);
+            if (ret_type != NULL) {
+                LLVMBuildRet(codegen->builder, LLVMConstNull(ret_type));
+            }
+        }
+    }
 }
 
 static void codegen_if(
@@ -2479,6 +3000,102 @@ cleanup_for_variables:
     }
 }
 
+static LLVMValueRef codegen_lvalue_pointer(
+    Codegen *codegen,
+    ASTNode *node,
+    LLVMTypeRef *out_type
+)
+{
+    if (codegen == NULL || node == NULL) {
+        return NULL;
+    }
+
+    if (node->kind == AST_IDENTIFIER) {
+        CodegenVariable *variable = codegen_find_variable(
+            codegen,
+            node->data.identifier.start,
+            node->data.identifier.length
+        );
+
+        if (variable == NULL || variable->storage_type == NULL) {
+            CODEGEN_ERROR(codegen, "codegen: unknown variable '%.*s'\n",
+                (int)node->data.identifier.length,
+                node->data.identifier.start
+            );
+            return NULL;
+        }
+
+        if (out_type != NULL) {
+            *out_type = variable->storage_type;
+        }
+        return variable->alloca;
+
+    } else if (node->kind == AST_INDEX) {
+        return codegen_array_element_pointer(codegen, node, out_type);
+
+    } else if (node->kind == AST_MEMBER_ACCESS) {
+        ASTNode *obj_node = node->data.member_access.object;
+        const char *member_name = node->data.member_access.member;
+        size_t member_len = node->data.member_access.member_length;
+
+        LLVMTypeRef obj_type = NULL;
+        LLVMValueRef obj_ptr = codegen_lvalue_pointer(codegen, obj_node, &obj_type);
+        if (obj_ptr == NULL || obj_type == NULL) {
+            return NULL;
+        }
+
+        if (LLVMGetTypeKind(obj_type) != LLVMStructTypeKind) {
+            CODEGEN_ERROR(codegen, "codegen: member access on non-struct type\n");
+            return NULL;
+        }
+
+        SemanticType sem_type;
+        if (codegen->semantic == NULL ||
+            !semantic_type_of(codegen->semantic, obj_node, &sem_type) ||
+            sem_type.kind != SEM_TYPE_STRUCT) {
+            CODEGEN_ERROR(codegen, "codegen: failed to determine struct type for member access\n");
+            return NULL;
+        }
+
+        size_t field_idx = 0;
+        ASTType field_ast_type;
+        if (!semantic_struct_field_index(
+                codegen->semantic,
+                sem_type.name,
+                sem_type.name_length,
+                member_name,
+                member_len,
+                &field_idx,
+                &field_ast_type)) {
+            CODEGEN_ERROR(codegen, "codegen: unknown struct field '%.*s'\n",
+                (int)member_len, member_name);
+            return NULL;
+        }
+
+        LLVMTypeRef field_llvm_type = llvm_type_from_ast(codegen, field_ast_type);
+        if (field_llvm_type == NULL) {
+            return NULL;
+        }
+
+        LLVMValueRef field_ptr = LLVMBuildStructGEP2(
+            codegen->builder,
+            obj_type,
+            obj_ptr,
+            (unsigned)field_idx,
+            "field.gep"
+        );
+
+        if (out_type != NULL) {
+            *out_type = field_llvm_type;
+        }
+        return field_ptr;
+
+    } else {
+        CODEGEN_ERROR(codegen, "codegen: unsupported lvalue\n");
+        return NULL;
+    }
+}
+
 static LLVMValueRef codegen_array_element_pointer(
     Codegen *codegen,
     ASTNode *expression,
@@ -2497,43 +3114,13 @@ static LLVMValueRef codegen_array_element_pointer(
     LLVMValueRef array_pointer = NULL;
     LLVMTypeRef array_type = NULL;
 
-    /*
-     * Resolve the base array. Nested AST_INDEX nodes allow
-     * multidimensional arrays to be indexed one dimension at a time.
-     */
-    if (array_node != NULL &&
-        array_node->kind == AST_IDENTIFIER) {
+    array_pointer = codegen_lvalue_pointer(
+        codegen,
+        array_node,
+        &array_type
+    );
 
-        CodegenVariable *variable = codegen_find_variable(
-            codegen,
-            array_node->data.identifier.start,
-            array_node->data.identifier.length
-        );
-
-        if (variable == NULL || variable->storage_type == NULL) {
-            CODEGEN_ERROR(codegen, "codegen: unknown array variable\n");
-            return NULL;
-        }
-
-        array_pointer = variable->alloca;
-        array_type = variable->storage_type;
-
-    } else if (array_node != NULL &&
-               array_node->kind == AST_INDEX) {
-
-        array_pointer = codegen_array_element_pointer(
-            codegen,
-            array_node,
-            &array_type
-        );
-
-        if (array_pointer == NULL || array_type == NULL) {
-            return NULL;
-        }
-
-    } else {
-        CODEGEN_ERROR(codegen, "codegen: unsupported array expression\n"
-        );
+    if (array_pointer == NULL || array_type == NULL) {
         return NULL;
     }
 

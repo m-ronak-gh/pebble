@@ -42,6 +42,7 @@ typedef struct {
 
         struct {
             TypeInfo *enum_type;
+            long long value;
         } enum_member;
     } data;
 } Symbol;
@@ -2604,6 +2605,7 @@ static int analyze_structs_and_enums(
                         node->data.enum_decl.name,
                         node->data.enum_decl.name_length
                     );
+                member->data.enum_member.value = (long long)j;
             }
         }
     }
@@ -2863,5 +2865,83 @@ int semantic_type_of(
         }
     }
 
+    return 0;
+}
+
+const ASTNode *semantic_get_program(const SemanticContext *context)
+{
+    return context ? context->program : NULL;
+}
+
+const ASTNode *semantic_lookup_struct(
+    const SemanticContext *context,
+    const char *name,
+    size_t length
+)
+{
+    if (!context || !name) return NULL;
+    Symbol *sym = scope_find(context->global, name, length);
+    if (sym && sym->kind == SYMBOL_STRUCT) {
+        return sym->data.aggregate.node;
+    }
+    return NULL;
+}
+
+const ASTNode *semantic_lookup_enum(
+    const SemanticContext *context,
+    const char *name,
+    size_t length
+)
+{
+    if (!context || !name) return NULL;
+    Symbol *sym = scope_find(context->global, name, length);
+    if (sym && sym->kind == SYMBOL_ENUM) {
+        return sym->data.aggregate.node;
+    }
+    return NULL;
+}
+
+int semantic_lookup_enum_member(
+    const SemanticContext *context,
+    const char *name,
+    size_t length,
+    long long *out_value
+)
+{
+    if (!context || !name) return 0;
+    Symbol *sym = scope_find(context->global, name, length);
+    if (sym && sym->kind == SYMBOL_ENUM_MEMBER) {
+        if (out_value) *out_value = sym->data.enum_member.value;
+        return 1;
+    }
+    return 0;
+}
+
+int semantic_struct_field_index(
+    const SemanticContext *context,
+    const char *struct_name,
+    size_t struct_name_len,
+    const char *field_name,
+    size_t field_name_len,
+    size_t *out_index,
+    ASTType *out_field_type
+)
+{
+    if (!context || !struct_name || !field_name) {
+        return 0;
+    }
+    const ASTNode *decl = semantic_lookup_struct(context, struct_name, struct_name_len);
+    if (!decl || decl->kind != AST_STRUCT) {
+        return 0;
+    }
+    for (size_t i = 0; i < decl->data.struct_decl.field_count; ++i) {
+        ASTNode *field = decl->data.struct_decl.fields[i];
+        if (text_equal(field->data.var_decl.name, field->data.var_decl.name_length,
+                       field_name, field_name_len)) {
+            if (out_index) *out_index = i;
+            if (out_field_type) *out_field_type = field->data.var_decl.type;
+            return 1;
+        }
+    }
     return 0;
 }

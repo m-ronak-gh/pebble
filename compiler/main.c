@@ -759,6 +759,14 @@ static int compile_source(const char *source_path, const char *output_path,
         return 1;
     }
 
+    /* Pass 0: declare all struct types. */
+    for (size_t i = 0; i < program->data.program.statement_count; ++i) {
+        ASTNode *node = program->data.program.statements[i];
+        if (node != NULL && node->kind == AST_STRUCT) {
+            codegen_declare_struct(codegen, node);
+        }
+    }
+
     /* Pass 1: declare all function signatures. */
     for (size_t i = 0; i < program->data.program.statement_count; ++i) {
         ASTNode *node = program->data.program.statements[i];

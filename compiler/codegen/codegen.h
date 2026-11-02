@@ -21,6 +21,15 @@ typedef struct CodegenLoop {
     LLVMBasicBlockRef continue_target;
     struct CodegenLoop *parent;
 } CodegenLoop;
+
+typedef struct CodegenStructDef {
+    char *name;
+    size_t name_length;
+    LLVMTypeRef llvm_type;
+    const ASTNode *decl;
+    struct CodegenStructDef *next;
+} CodegenStructDef;
+
 typedef struct {
     LLVMContextRef context;
     LLVMModuleRef module;
@@ -32,6 +41,7 @@ typedef struct {
     LLVMValueRef current_function;
     CodegenVariable *variables;
     CodegenLoop *current_loop;
+    CodegenStructDef *structs;
     int has_error;
 } Codegen;
 
@@ -62,6 +72,11 @@ LLVMValueRef codegen_expression(
 void codegen_declare_function(
     Codegen *codegen,
     ASTNode *function
+);
+
+LLVMTypeRef codegen_declare_struct(
+    Codegen *codegen,
+    const ASTNode *struct_node
 );
 
 void codegen_function(

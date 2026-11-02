@@ -720,6 +720,371 @@ else
     cat "$TMP_DIR/log"
 fi
 
+# Test: structs basic read/write, zero-init, and copy
+cat > "$TMP_DIR/struct_basic.pb" <<'EOF'
+struct Point {
+    number x;
+    number y;
+}
+
+function number main() {
+    Point p1;
+    print p1.x;
+    print p1.y;
+    p1.x = 10;
+    p1.y = 20;
+    print p1.x;
+    print p1.y;
+
+    Point p2;
+    p2 = p1;
+    p2.x = 30;
+    print p2.x;
+    print p1.x;
+    return 0;
+}
+EOF
+
+EXPECTED=$(printf '0\n0\n10\n20\n30\n10')
+if "$COMPILER" build "$TMP_DIR/struct_basic.pb" -o "$TMP_DIR/struct_basic" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/struct_basic")" = "$EXPECTED" ]; then
+    pass "structs basic read/write, zero-init, and copy"
+else
+    fail "structs basic read/write, zero-init, and copy"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: nested structs and struct arrays
+cat > "$TMP_DIR/struct_nested.pb" <<'EOF'
+struct Point {
+    number x;
+    number y;
+}
+
+struct Rect {
+    Point topLeft;
+    Point bottomRight;
+}
+
+function number main() {
+    Rect r;
+    r.topLeft.x = 1;
+    r.topLeft.y = 2;
+    r.bottomRight.x = 10;
+    r.bottomRight.y = 20;
+    print r.topLeft.x;
+    print r.bottomRight.y;
+
+    Point[3] pts;
+    pts[0].x = 100;
+    pts[1].x = 200;
+    pts[2].x = 300;
+    print pts[0].x;
+    print pts[1].x;
+    print pts[2].x;
+    return 0;
+}
+EOF
+
+EXPECTED=$(printf '1\n20\n100\n200\n300')
+if "$COMPILER" build "$TMP_DIR/struct_nested.pb" -o "$TMP_DIR/struct_nested" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/struct_nested")" = "$EXPECTED" ]; then
+    pass "nested structs and struct arrays"
+else
+    fail "nested structs and struct arrays"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: structs in function parameters and return values
+cat > "$TMP_DIR/struct_fn.pb" <<'EOF'
+struct Vector {
+    number dx;
+    number dy;
+}
+
+function Vector makeVector(number dx, number dy) {
+    Vector v;
+    v.dx = dx;
+    v.dy = dy;
+    return v;
+}
+
+function number lengthSquared(Vector v) {
+    return v.dx * v.dx + v.dy * v.dy;
+}
+
+function number main() {
+    Vector v makeVector(3, 4);
+    print v.dx;
+    print v.dy;
+    print lengthSquared(v);
+    return 0;
+}
+EOF
+
+EXPECTED=$(printf '3\n4\n25')
+if "$COMPILER" build "$TMP_DIR/struct_fn.pb" -o "$TMP_DIR/struct_fn" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/struct_fn")" = "$EXPECTED" ]; then
+    pass "structs in function parameters and return values"
+else
+    fail "structs in function parameters and return values"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: enums declaration, values, comparisons, functions, and print
+cat > "$TMP_DIR/enum_test.pb" <<'EOF'
+enum Status {
+    PENDING,
+    ACTIVE,
+    CLOSED
+}
+
+function Status getNextStatus(Status s) {
+    if (s == PENDING) {
+        return ACTIVE;
+    }
+    return CLOSED;
+}
+
+function number main() {
+    Status s1;
+    print s1;
+
+    Status s2 ACTIVE;
+    print s2;
+
+    if (s2 == ACTIVE) {
+        print 1;
+    } else {
+        print 0;
+    }
+
+    if (s2 != PENDING) {
+        print 1;
+    }
+
+    Status next getNextStatus(s1);
+    print next;
+    return 0;
+}
+EOF
+
+EXPECTED=$(printf '0\n1\n1\n1\n1')
+if "$COMPILER" build "$TMP_DIR/enum_test.pb" -o "$TMP_DIR/enum_test" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/enum_test")" = "$EXPECTED" ]; then
+    pass "enums declaration, values, comparisons, functions, and print"
+else
+    fail "enums declaration, values, comparisons, functions, and print"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: void functions and bare return
+cat > "$TMP_DIR/void_return.pb" <<'EOF'
+function void logNumber(number n) {
+    if (n < 0) {
+        return;
+    }
+    print n;
+}
+
+function number main() {
+    logNumber(-5);
+    logNumber(42);
+    return 0;
+}
+EOF
+
+if "$COMPILER" build "$TMP_DIR/void_return.pb" -o "$TMP_DIR/void_return" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/void_return")" = "42" ]; then
+    pass "void functions and bare return"
+else
+    fail "void functions and bare return"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: logical and bitwise operators
+cat > "$TMP_DIR/operators.pb" <<'EOF'
+function number main() {
+    number a 6;
+    number b 3;
+
+    print a & b;
+    print a | b;
+    print a ^ b;
+    print ~0;
+    print 1 << 4;
+    print 32 >> 2;
+
+    bool t true;
+    bool f false;
+    if (t && f) {
+        print 0;
+    } else {
+        print 1;
+    }
+
+    if (t || f) {
+        print 1;
+    } else {
+        print 0;
+    }
+
+    return 0;
+}
+EOF
+
+EXPECTED=$(printf '2\n7\n5\n-1\n16\n8\n1\n1')
+if "$COMPILER" build "$TMP_DIR/operators.pb" -o "$TMP_DIR/operators" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/operators")" = "$EXPECTED" ]; then
+    pass "logical and bitwise operators"
+else
+    fail "logical and bitwise operators"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: builtins length, typeof, and string equality
+cat > "$TMP_DIR/builtins.pb" <<'EOF'
+struct Node {
+    number val;
+}
+
+enum State { ON, OFF }
+
+function number main() {
+    string s "hello";
+    print length(s);
+
+    number[5] arr;
+    print length(arr);
+
+    print typeof(10);
+    print typeof(true);
+    print typeof(s);
+
+    Node n;
+    print typeof(n);
+
+    State st ON;
+    print typeof(st);
+
+    string s1 "pebble";
+    string s2 "pebble";
+    string s3 "rock";
+
+    if (s1 == s2) {
+        print 1;
+    } else {
+        print 0;
+    }
+
+    if (s1 != s3) {
+        print 1;
+    } else {
+        print 0;
+    }
+
+    return 0;
+}
+EOF
+
+EXPECTED=$(printf '5\n5\nnumber\nbool\nstring\nNode\nState\n1\n1')
+if "$COMPILER" build "$TMP_DIR/builtins.pb" -o "$TMP_DIR/builtins" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/builtins")" = "$EXPECTED" ]; then
+    pass "builtins length, typeof, and string equality"
+else
+    fail "builtins length, typeof, and string equality"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: builtin panic terminates execution
+cat > "$TMP_DIR/panic_test.pb" <<'EOF'
+function number main() {
+    print 100;
+    panic("something broke");
+    print 200;
+    return 0;
+}
+EOF
+
+set +e
+"$COMPILER" build "$TMP_DIR/panic_test.pb" -o "$TMP_DIR/panic_test" >/dev/null 2>&1
+PANIC_OUTPUT=$("$TMP_DIR/panic_test" 2>&1)
+PANIC_EXIT=$?
+set -e
+if [ "$PANIC_EXIT" -ne 0 ] && echo "$PANIC_OUTPUT" | grep -q "panic: something broke"; then
+    pass "builtin panic halts execution"
+else
+    fail "builtin panic halts execution (exit $PANIC_EXIT, output: $PANIC_OUTPUT)"
+fi
+
+# Test: builtin assert stops on false
+cat > "$TMP_DIR/assert_test.pb" <<'EOF'
+function number main() {
+    assert(1 == 1, "math works");
+    assert(1 == 2, "assertion failed");
+    return 0;
+}
+EOF
+
+set +e
+"$COMPILER" build "$TMP_DIR/assert_test.pb" -o "$TMP_DIR/assert_test" >/dev/null 2>&1
+ASSERT_OUTPUT=$("$TMP_DIR/assert_test" 2>&1)
+ASSERT_EXIT=$?
+set -e
+if [ "$ASSERT_EXIT" -ne 0 ] && echo "$ASSERT_OUTPUT" | grep -q "panic: assertion failed"; then
+    pass "builtin assert halts on false condition"
+else
+    fail "builtin assert halts on false condition (exit $ASSERT_EXIT, output: $ASSERT_OUTPUT)"
+fi
+
+# Test: reject unknown struct field
+cat > "$TMP_DIR/bad_field.pb" <<'EOF'
+struct Point {
+    number x;
+}
+
+function number main() {
+    Point p;
+    p.y = 10;
+    return 0;
+}
+EOF
+
+if "$COMPILER" build "$TMP_DIR/bad_field.pb" -o "$TMP_DIR/bad_field" >"$TMP_DIR/log" 2>&1; then
+    fail "reject unknown struct field"
+else
+    pass "reject unknown struct field"
+fi
+
+# Test: reject member access on primitive
+cat > "$TMP_DIR/bad_member.pb" <<'EOF'
+function number main() {
+    number x 5;
+    x.field = 10;
+    return 0;
+}
+EOF
+
+if "$COMPILER" build "$TMP_DIR/bad_member.pb" -o "$TMP_DIR/bad_member" >"$TMP_DIR/log" 2>&1; then
+    fail "reject member access on primitive"
+else
+    pass "reject member access on primitive"
+fi
+
+# Test: reject uninitialized primitive scalar
+cat > "$TMP_DIR/bad_uninit.pb" <<'EOF'
+function number main() {
+    number x;
+    return 0;
+}
+EOF
+
+if "$COMPILER" build "$TMP_DIR/bad_uninit.pb" -o "$TMP_DIR/bad_uninit" >"$TMP_DIR/log" 2>&1; then
+    fail "reject uninitialized primitive scalar"
+else
+    pass "reject uninitialized primitive scalar"
+fi
+
 echo "Driver tests: $PASS passed, $FAIL failed"
 
 [ "$FAIL" -eq 0 ]

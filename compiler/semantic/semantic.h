@@ -42,4 +42,35 @@ int semantic_type_of(
 
 const char *semantic_type_name(SemanticTypeKind kind);
 
+const ASTNode *semantic_get_program(const SemanticContext *context);
+
+const ASTNode *semantic_lookup_struct(
+    const SemanticContext *context,
+    const char *name,
+    size_t length
+);
+
+const ASTNode *semantic_lookup_enum(
+    const SemanticContext *context,
+    const char *name,
+    size_t length
+);
+
+int semantic_lookup_enum_member(
+    const SemanticContext *context,
+    const char *name,
+    size_t length,
+    long long *out_value
+);
+
+int semantic_struct_field_index(
+    const SemanticContext *context,
+    const char *struct_name,
+    size_t struct_name_len,
+    const char *field_name,
+    size_t field_name_len,
+    size_t *out_index,
+    ASTType *out_field_type
+);
+
 #endif // PEBBLE_SEMANTIC_H */
