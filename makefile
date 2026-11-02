@@ -147,7 +147,31 @@ test: unit-tests smoke native-test driver-test
 driver-test: peb
 	./tests/driver_test.sh ./peb
 
+PLATFORM ?= $(shell uname -s | tr '[:upper:]' '[:lower:]')-$(shell uname -m)
+DIST_DIR = dist/pebble-$(PLATFORM)
+PREFIX ?= /usr/local
+
+package: peb
+	rm -rf $(DIST_DIR) dist/pebble-$(PLATFORM).tar.gz
+	mkdir -p $(DIST_DIR)/bin $(DIST_DIR)/runtime
+	cp $(PEBBLE) $(DIST_DIR)/bin/
+	cp runtime/pebble_runtime.c runtime/pebble_runtime.h $(DIST_DIR)/runtime/
+	cp README.md pebble-language-spec.md $(DIST_DIR)/
+	tar -czf dist/pebble-$(PLATFORM).tar.gz -C dist pebble-$(PLATFORM)
+	@echo "Package created: dist/pebble-$(PLATFORM).tar.gz"
+
+install: peb
+	install -d $(DESTDIR)$(PREFIX)/bin
+	install -m 755 $(PEBBLE) $(DESTDIR)$(PREFIX)/bin/
+	install -d $(DESTDIR)$(PREFIX)/lib/pebble
+	install -m 644 runtime/pebble_runtime.c runtime/pebble_runtime.h $(DESTDIR)$(PREFIX)/lib/pebble/
+
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/$(PEBBLE)
+	rm -rf $(DESTDIR)$(PREFIX)/lib/pebble
+
 clean:
-	rm -f $(PEBBLE) $(SMOKE) pebble-smoke.o pebble-smoke-native \
+	rm -rf $(PEBBLE) $(SMOKE) pebble-smoke.o pebble-smoke-native \
 		$(CODEGEN_TEST_BIN) $(CODEGEN_IR) $(CODEGEN_EXE) \
-		$(LEXER_TEST_BIN) $(PARSER_TEST_BIN) $(SEMANTIC_TEST_BIN)
+		$(LEXER_TEST_BIN) $(PARSER_TEST_BIN) $(SEMANTIC_TEST_BIN) \
+		dist

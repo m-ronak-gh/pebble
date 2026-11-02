@@ -501,6 +501,13 @@ static char *find_runtime_path(const char *compiler_path)
                 return strdup(buf);
             }
 
+            /* Package directory layout: <dir>/../runtime/pebble_runtime.c */
+            snprintf(buf, sizeof(buf), "%s/../runtime/pebble_runtime.c", compiler_dir);
+            if (file_exists(buf)) {
+                free(compiler_dir);
+                return strdup(buf);
+            }
+
             /* Standard unix install: <dir>/../lib/pebble/pebble_runtime.c */
             snprintf(buf, sizeof(buf), "%s/../lib/pebble/pebble_runtime.c", compiler_dir);
             if (file_exists(buf)) {
