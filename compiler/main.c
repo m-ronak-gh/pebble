@@ -1,6 +1,21 @@
+#if !defined(_WIN32)
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
+#else
+#include <windows.h>
+#include <process.h>
+#include <io.h>
+#endif
 
 #include <errno.h>
+#include <limits.h>
 #include <llvm-c/Analysis.h>
 #include <llvm-c/Core.h>
 #include <llvm-c/Target.h>
@@ -8,8 +23,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
-#include <unistd.h>
+
+#ifndef PATH_MAX
+#if defined(MAX_PATH)
+#define PATH_MAX MAX_PATH
+#else
+#define PATH_MAX 4096
+#endif
+#endif
 
 #include "ast/ast.h"
 #include "codegen/codegen.h"
@@ -274,15 +295,30 @@ static char *default_output_name(const char *source)
     size_t length = strlen(source);
     size_t stem_length = length;
     const char *slash = strrchr(source, '/');
+#if defined(_WIN32)
+    const char *bslash = strrchr(source, '\\');
+    if (bslash != NULL && (slash == NULL || bslash > slash)) {
+        slash = bslash;
+    }
+#endif
     const char *dot = strrchr(source, '.');
     if (dot != NULL && (slash == NULL || dot > slash)) {
         stem_length = (size_t)(dot - source);
     }
 
-    char *output = malloc(stem_length + 1);
+#if defined(_WIN32)
+    const char *ext = ".exe";
+    size_t ext_len = 4;
+#else
+    const char *ext = "";
+    size_t ext_len = 0;
+#endif
+
+    char *output = malloc(stem_length + ext_len + 1);
     if (output == NULL) return NULL;
     memcpy(output, source, stem_length);
-    output[stem_length] = '\0';
+    memcpy(output + stem_length, ext, ext_len);
+    output[stem_length + ext_len] = '\0';
     if (output[0] == '\0') {
         free(output);
         return NULL;
@@ -290,32 +326,79 @@ static char *default_output_name(const char *source)
     return output;
 }
 
-/* Quote a path for a POSIX shell command. Embedded single quotes become '\'' . */
-static char *shell_quote(const char *text)
+#if defined(_WIN32)
+static char *windows_build_cmdline(const char *const *argv)
 {
-    size_t needed = 3;
-    for (const char *p = text; *p; ++p) {
-        needed += (*p == '\'') ? 4 : 1;
-    }
-
-    char *quoted = malloc(needed);
-    if (quoted == NULL) return NULL;
-    char *out = quoted;
-    *out++ = '\'';
-    for (const char *p = text; *p; ++p) {
-        if (*p == '\'') {
-            memcpy(out, "'\\''", 4);
-            out += 4;
-        } else {
-            *out++ = *p;
+    size_t len = 0;
+    for (int i = 0; argv[i] != NULL; ++i) {
+        if (i > 0) len++;
+        const char *arg = argv[i];
+        int needs_quote = (strchr(arg, ' ') != NULL || strchr(arg, '\t') != NULL || arg[0] == '\0');
+        if (needs_quote) len += 2;
+        for (const char *p = arg; *p; ++p) {
+            if (*p == '"' || *p == '\\') len++;
+            len++;
         }
     }
-    *out++ = '\'';
+
+    char *cmd = malloc(len + 1);
+    if (cmd == NULL) return NULL;
+    char *out = cmd;
+
+    for (int i = 0; argv[i] != NULL; ++i) {
+        if (i > 0) *out++ = ' ';
+        const char *arg = argv[i];
+        int needs_quote = (strchr(arg, ' ') != NULL || strchr(arg, '\t') != NULL || arg[0] == '\0');
+        if (needs_quote) *out++ = '"';
+        for (const char *p = arg; *p; ++p) {
+            if (*p == '"') {
+                *out++ = '\\';
+            }
+            *out++ = *p;
+        }
+        if (needs_quote) *out++ = '"';
+    }
     *out = '\0';
-    return quoted;
+    return cmd;
 }
 
-static int run_program(const char *path)
+static int platform_run_command(const char *const *argv)
+{
+    char *cmdline = windows_build_cmdline(argv);
+    if (cmdline == NULL) return -1;
+
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+
+    if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+        fprintf(stderr, "peb: failed to execute '%s' (error %lu)\n", argv[0], GetLastError());
+        free(cmdline);
+        return -1;
+    }
+    free(cmdline);
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD exit_code = 1;
+    GetExitCodeProcess(pi.hProcess, &exit_code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return (int)exit_code;
+}
+
+static int platform_get_executable_path(char *buffer, size_t size, const char *argv0)
+{
+    (void)argv0;
+    DWORD len = GetModuleFileNameA(NULL, buffer, (DWORD)size);
+    if (len > 0 && len < size) {
+        return 1;
+    }
+    return 0;
+}
+#else
+static int platform_run_command(const char *const *argv)
 {
     pid_t child = fork();
     if (child < 0) {
@@ -323,8 +406,8 @@ static int run_program(const char *path)
         return 1;
     }
     if (child == 0) {
-        execl(path, path, (char *)NULL);
-        fprintf(stderr, "peb: cannot execute '%s': %s\n", path, strerror(errno));
+        execvp(argv[0], (char *const *)argv);
+        fprintf(stderr, "peb: cannot execute '%s': %s\n", argv[0], strerror(errno));
         _exit(127);
     }
 
@@ -337,6 +420,130 @@ static int run_program(const char *path)
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
     return 1;
+}
+
+static int platform_get_executable_path(char *buffer, size_t size, const char *argv0)
+{
+#if defined(__APPLE__)
+    (void)argv0;
+    uint32_t bufsize = (uint32_t)size;
+    if (_NSGetExecutablePath(buffer, &bufsize) == 0) {
+        char real[PATH_MAX];
+        if (realpath(buffer, real) != NULL) {
+            strncpy(buffer, real, size);
+            buffer[size - 1] = '\0';
+        }
+        return 1;
+    }
+    return 0;
+#elif defined(__linux__)
+    (void)argv0;
+    ssize_t len = readlink("/proc/self/exe", buffer, size - 1);
+    if (len > 0) {
+        buffer[len] = '\0';
+        return 1;
+    }
+    return 0;
+#else
+    if (argv0 != NULL && realpath(argv0, buffer) != NULL) {
+        return 1;
+    }
+    return 0;
+#endif
+}
+#endif
+
+static int file_exists(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (f != NULL) {
+        fclose(f);
+        return 1;
+    }
+    return 0;
+}
+
+static char *find_runtime_path(const char *compiler_path)
+{
+    /* 1. Explicit environment variable PEBBLE_RUNTIME_PATH */
+    const char *env_path = getenv("PEBBLE_RUNTIME_PATH");
+    if (env_path != NULL && file_exists(env_path)) {
+        return strdup(env_path);
+    }
+
+    /* 2. Directory override PEBBLE_RUNTIME_DIR */
+    const char *env_dir = getenv("PEBBLE_RUNTIME_DIR");
+    if (env_dir != NULL && env_dir[0] != '\0') {
+        char buf[PATH_MAX];
+        snprintf(buf, sizeof(buf), "%s/pebble_runtime.c", env_dir);
+        if (file_exists(buf)) return strdup(buf);
+        snprintf(buf, sizeof(buf), "%s/runtime/pebble_runtime.c", env_dir);
+        if (file_exists(buf)) return strdup(buf);
+    }
+
+    /* 3. Discovered directory of compiler binary */
+    if (compiler_path != NULL && compiler_path[0] != '\0') {
+        char *compiler_dir = get_directory(compiler_path);
+        if (compiler_dir != NULL) {
+            char buf[PATH_MAX];
+
+            /* In repository: <dir>/runtime/pebble_runtime.c */
+            snprintf(buf, sizeof(buf), "%s/runtime/pebble_runtime.c", compiler_dir);
+            if (file_exists(buf)) {
+                free(compiler_dir);
+                return strdup(buf);
+            }
+
+            /* Bundled co-located: <dir>/pebble_runtime.c */
+            snprintf(buf, sizeof(buf), "%s/pebble_runtime.c", compiler_dir);
+            if (file_exists(buf)) {
+                free(compiler_dir);
+                return strdup(buf);
+            }
+
+            /* Standard unix install: <dir>/../lib/pebble/pebble_runtime.c */
+            snprintf(buf, sizeof(buf), "%s/../lib/pebble/pebble_runtime.c", compiler_dir);
+            if (file_exists(buf)) {
+                free(compiler_dir);
+                return strdup(buf);
+            }
+
+            /* Standard unix install: <dir>/../share/pebble/pebble_runtime.c */
+            snprintf(buf, sizeof(buf), "%s/../share/pebble/pebble_runtime.c", compiler_dir);
+            if (file_exists(buf)) {
+                free(compiler_dir);
+                return strdup(buf);
+            }
+
+            free(compiler_dir);
+        }
+    }
+
+    /* 4. Current working directory fallback */
+    if (file_exists("runtime/pebble_runtime.c")) {
+        return strdup("runtime/pebble_runtime.c");
+    }
+    if (file_exists("pebble_runtime.c")) {
+        return strdup("pebble_runtime.c");
+    }
+
+    return NULL;
+}
+
+static const char *get_linker_command(void)
+{
+    const char *env_cc = getenv("PEBBLE_CC");
+    if (env_cc != NULL && env_cc[0] != '\0') return env_cc;
+    env_cc = getenv("CC");
+    if (env_cc != NULL && env_cc[0] != '\0') return env_cc;
+
+#if defined(_WIN32)
+    return "clang";
+#elif defined(__APPLE__)
+    return "clang";
+#else
+    return "cc";
+#endif
 }
 
 static int emit_object(LLVMModuleRef module, const char *object_path)
@@ -401,51 +608,42 @@ static int emit_object(LLVMModuleRef module, const char *object_path)
     return ok;
 }
 
-static int link_object(const char *object_path, const char *output_path)
+static int link_object(const char *object_path, const char *output_path, const char *runtime_path)
 {
-    const char *runtime_path = "runtime/pebble_runtime.c";
-    char *object_q = shell_quote(object_path);
-    char *output_q = shell_quote(output_path);
-    char *runtime_q = shell_quote(runtime_path);
+    const char *linker = get_linker_command();
+    const char *args[16];
+    int argc = 0;
 
-    if (object_q == NULL || output_q == NULL || runtime_q == NULL) {
-        fprintf(stderr, "peb: out of memory preparing linker command\n");
-        free(object_q);
-        free(output_q);
-        free(runtime_q);
-        return 0;
+    args[argc++] = linker;
+
+#if defined(__linux__)
+    args[argc++] = "-no-pie";
+#endif
+
+    char *runtime_dir = get_directory(runtime_path);
+    char include_flag[PATH_MAX + 4];
+    if (runtime_dir != NULL) {
+        snprintf(include_flag, sizeof(include_flag), "-I%s", runtime_dir);
+        args[argc++] = include_flag;
     }
 
-    size_t length = strlen(object_q) +
-                    strlen(output_q) +
-                    strlen(runtime_q) + 40;
+    args[argc++] = object_path;
+    args[argc++] = runtime_path;
+    args[argc++] = "-o";
+    args[argc++] = output_path;
+    args[argc] = NULL;
 
-    char *command = malloc(length);
-    if (command == NULL) {
-        free(object_q);
-        free(output_q);
-        free(runtime_q);
-        return 0;
-    }
-
-    snprintf(command, length, "cc -no-pie %s %s -o %s",
-             object_q, runtime_q, output_q);
-
-    int status = system(command);
-    free(command);
-    free(object_q);
-    free(output_q);
-    free(runtime_q);
-
-    if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        fprintf(stderr, "peb: system linker failed\n");
+    int status = platform_run_command(args);
+    free(runtime_dir);
+    if (status != 0) {
+        fprintf(stderr, "peb: system linker failed with status %d\n", status);
         return 0;
     }
     return 1;
 }
 
 static int compile_source(const char *source_path, const char *output_path,
-                          int keep_ir)
+                          int keep_ir, const char *compiler_path)
 {
     SourceManager sm = {0};
 
@@ -454,10 +652,19 @@ static int compile_source(const char *source_path, const char *output_path,
         return 1;
     }
 
+    char *runtime_path = find_runtime_path(compiler_path);
+    if (runtime_path == NULL) {
+        fprintf(stderr, "peb: cannot find Pebble runtime (pebble_runtime.c)\n"
+                        "     Please ensure Pebble is installed properly or set PEBBLE_RUNTIME_DIR\n");
+        free(source);
+        return 1;
+    }
+
     char *root_canonical = resolve_canonical_path(source_path);
     char *root_stored = root_canonical ? root_canonical : strdup(source_path);
     if (root_stored == NULL || !source_manager_add(&sm, root_stored, source)) {
         free(root_stored);
+        free(runtime_path);
         free(source);
         return 1;
     }
@@ -465,6 +672,7 @@ static int compile_source(const char *source_path, const char *output_path,
     if (remove(output_path) != 0 && errno != ENOENT) {
         fprintf(stderr, "peb: cannot remove old output '%s': %s\n",
                 output_path, strerror(errno));
+        free(runtime_path);
         source_manager_free(&sm);
         return 1;
     }
@@ -474,12 +682,14 @@ static int compile_source(const char *source_path, const char *output_path,
     ASTNode *program = parser_parse_program(&parser);
     if (program == NULL) {
         fprintf(stderr, "peb: parsing failed; executable not produced\n");
+        free(runtime_path);
         source_manager_free(&sm);
         return 1;
     }
 
     if (!resolve_imports(program, source_path, &sm)) {
         fprintf(stderr, "peb: import resolution failed; executable not produced\n");
+        free(runtime_path);
         ast_free(program);
         source_manager_free(&sm);
         return 1;
@@ -488,6 +698,7 @@ static int compile_source(const char *source_path, const char *output_path,
     SemanticContext *semantic = semantic_analyze(program);
     if (semantic == NULL) {
         fprintf(stderr, "peb: semantic analysis failed; executable not produced\n");
+        free(runtime_path);
         ast_free(program);
         source_manager_free(&sm);
         return 1;
@@ -507,6 +718,7 @@ static int compile_source(const char *source_path, const char *output_path,
 
     if (main_count != 1 || main_function == NULL) {
         fprintf(stderr, "peb: program must define exactly one function number main()\n");
+        free(runtime_path);
         semantic_free(semantic);
         ast_free(program);
         source_manager_free(&sm);
@@ -514,6 +726,7 @@ static int compile_source(const char *source_path, const char *output_path,
     }
     if (main_function->data.function_decl.parameter_count != 0) {
         fprintf(stderr, "peb: entry point main() must not have parameters\n");
+        free(runtime_path);
         semantic_free(semantic);
         ast_free(program);
         source_manager_free(&sm);
@@ -522,6 +735,7 @@ static int compile_source(const char *source_path, const char *output_path,
     if (main_function->data.function_decl.return_type.kind != AST_TYPE_NUMBER ||
         main_function->data.function_decl.return_type.dimension_count != 0) {
         fprintf(stderr, "peb: entry point must return number\n");
+        free(runtime_path);
         semantic_free(semantic);
         ast_free(program);
         source_manager_free(&sm);
@@ -531,6 +745,7 @@ static int compile_source(const char *source_path, const char *output_path,
     Codegen *codegen = codegen_create("pebble_module", semantic);
     if (codegen == NULL) {
         fprintf(stderr, "peb: could not initialize code generator\n");
+        free(runtime_path);
         semantic_free(semantic);
         ast_free(program);
         source_manager_free(&sm);
@@ -560,6 +775,7 @@ static int compile_source(const char *source_path, const char *output_path,
         fprintf(stderr,
                 "peb: code generation failed; executable not produced\n");
         (void)remove(output_path);
+        free(runtime_path);
         codegen_free(codegen);
         semantic_free(semantic);
         ast_free(program);
@@ -574,6 +790,7 @@ static int compile_source(const char *source_path, const char *output_path,
         fprintf(stderr, "peb: out of memory creating output paths\n");
         free(object_path);
         free(ir_path);
+        free(runtime_path);
         codegen_free(codegen);
         semantic_free(semantic);
         ast_free(program);
@@ -590,7 +807,8 @@ static int compile_source(const char *source_path, const char *output_path,
         if (!codegen_write_ir(codegen, ir_path)) ok = 0;
     }
     if (ok) ok = emit_object(codegen_module(codegen), object_path);
-    if (ok) ok = link_object(object_path, output_path);
+    if (ok) ok = link_object(object_path, output_path, runtime_path);
+    free(runtime_path);
     (void)remove(object_path);
     if (!keep_ir) (void)remove(ir_path);
 
@@ -608,6 +826,12 @@ static int compile_source(const char *source_path, const char *output_path,
 
 int main(int argc, char **argv)
 {
+    char compiler_path[PATH_MAX];
+    if (!platform_get_executable_path(compiler_path, sizeof(compiler_path), argv[0])) {
+        strncpy(compiler_path, argv[0], sizeof(compiler_path) - 1);
+        compiler_path[sizeof(compiler_path) - 1] = '\0';
+    }
+
     const char *mode = "run";
     const char *source = NULL;
     const char *output = NULL;
@@ -690,23 +914,31 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    int status = compile_source(source, output, keep_ir);
+    int status = compile_source(source, output, keep_ir, compiler_path);
     if (status == 0 && strcmp(mode, "run") == 0) {
-        /* exec requires a path containing '/', so prefix bare output names. */
+        char *run_target = NULL;
+#if !defined(_WIN32)
         if (strchr(output, '/') == NULL) {
             size_t n = strlen(output);
-            char *relative = malloc(n + 3);
-            if (relative == NULL) {
-                fprintf(stderr, "peb: out of memory preparing executable path\n");
-                free(generated_output);
-                return 1;
+            run_target = malloc(n + 3);
+            if (run_target != NULL) {
+                snprintf(run_target, n + 3, "./%s", output);
             }
-            snprintf(relative, n + 3, "./%s", output);
-            status = run_program(relative);
-            free(relative);
         } else {
-            status = run_program(output);
+            run_target = strdup(output);
         }
+#else
+        run_target = strdup(output);
+#endif
+        if (run_target == NULL) {
+            fprintf(stderr, "peb: out of memory preparing executable path\n");
+            free(generated_output);
+            return 1;
+        }
+
+        const char *run_argv[] = { run_target, NULL };
+        status = platform_run_command(run_argv);
+        free(run_target);
     }
 
     free(generated_output);

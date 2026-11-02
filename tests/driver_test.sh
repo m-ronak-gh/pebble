@@ -612,6 +612,114 @@ else
     cat "$TMP_DIR/log"
 fi
 
+# CROSS-PLATFORM DRIVER TESTS
+
+# Test: peb run command
+cat > "$TMP_DIR/run_test.pb" <<'EOF'
+function number main() {
+    print 99;
+    return 0;
+}
+EOF
+
+RUN_OUT="$("$COMPILER" run "$TMP_DIR/run_test.pb" 2>/dev/null)"
+if [ "$RUN_OUT" = "99" ]; then
+    pass "peb run execution"
+else
+    fail "peb run execution"
+fi
+
+# Test: output path containing spaces
+if "$COMPILER" build "$TMP_DIR/basic.pb" -o "$TMP_DIR/output with spaces" \
+    >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/output with spaces")" = "42" ]; then
+    pass "output path containing spaces"
+else
+    fail "output path containing spaces"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: source path containing spaces
+mkdir -p "$TMP_DIR/dir with spaces"
+cat > "$TMP_DIR/dir with spaces/space_src.pb" <<'EOF'
+function number main() {
+    print 101;
+    return 0;
+}
+EOF
+
+if "$COMPILER" build "$TMP_DIR/dir with spaces/space_src.pb" -o "$TMP_DIR/space_src_out" \
+    >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/space_src_out")" = "101" ]; then
+    pass "source path containing spaces"
+else
+    fail "source path containing spaces"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: running compiler outside installation directory / unrelated working directory
+ABS_COMPILER="$(cd "$(dirname "$COMPILER")" && pwd)/$(basename "$COMPILER")"
+mkdir -p "$TMP_DIR/unrelated_cwd"
+if (cd "$TMP_DIR/unrelated_cwd" && "$ABS_COMPILER" build "$TMP_DIR/basic.pb" -o "$TMP_DIR/remote_build") \
+    >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/remote_build")" = "42" ]; then
+    pass "runtime discovery outside installation directory"
+else
+    fail "runtime discovery outside installation directory"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: runtime discovery using PEBBLE_RUNTIME_DIR
+mkdir -p "$TMP_DIR/custom_runtime"
+cp runtime/pebble_runtime.c runtime/pebble_runtime.h "$TMP_DIR/custom_runtime/"
+if (PEBBLE_RUNTIME_DIR="$TMP_DIR/custom_runtime" "$COMPILER" build "$TMP_DIR/basic.pb" -o "$TMP_DIR/custom_rt_build") \
+    >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/custom_rt_build")" = "42" ]; then
+    pass "runtime discovery with PEBBLE_RUNTIME_DIR"
+else
+    fail "runtime discovery with PEBBLE_RUNTIME_DIR"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: correct process exit code propagation
+cat > "$TMP_DIR/exit_code.pb" <<'EOF'
+function number main() {
+    return 42;
+}
+EOF
+
+set +e
+"$COMPILER" run "$TMP_DIR/exit_code.pb" >/dev/null 2>&1
+EXIT_STATUS=$?
+set -e
+if [ "$EXIT_STATUS" -eq 42 ]; then
+    pass "process exit code propagation"
+else
+    fail "process exit code propagation (expected 42, got $EXIT_STATUS)"
+fi
+
+# Test: correct default executable naming
+cat > "$TMP_DIR/default_name.pb" <<'EOF'
+function number main() {
+    return 0;
+}
+EOF
+
+if "$COMPILER" build "$TMP_DIR/default_name.pb" >"$TMP_DIR/log" 2>&1; then
+    EXPECTED_NAME="$TMP_DIR/default_name"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) EXPECTED_NAME="$TMP_DIR/default_name.exe" ;;
+    esac
+    if [ -f "$EXPECTED_NAME" ]; then
+        pass "correct executable naming"
+    else
+        fail "correct executable naming (expected $EXPECTED_NAME)"
+    fi
+else
+    fail "default naming build failed"
+    cat "$TMP_DIR/log"
+fi
+
 echo "Driver tests: $PASS passed, $FAIL failed"
 
 [ "$FAIL" -eq 0 ]
