@@ -432,6 +432,186 @@ else
     cat "$TMP_DIR/log"
 fi
 
+# IMPORT TESTS
+
+# Test: basic import of function from another module
+cat > "$TMP_DIR/math_helper.pb" <<'EOF'
+function number multiply(number a, number b) {
+    return a * b;
+}
+EOF
+
+cat > "$TMP_DIR/import_basic.pb" <<'EOF'
+import "math_helper.pb";
+
+function number main() {
+    print multiply(6, 7);
+    return 0;
+}
+EOF
+
+if "$COMPILER" build "$TMP_DIR/import_basic.pb" -o "$TMP_DIR/import_basic" \
+    >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/import_basic")" = "42" ]; then
+    pass "basic import and function call"
+else
+    fail "basic import and function call"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: nested chained imports (A -> B -> C)
+cat > "$TMP_DIR/import_c.pb" <<'EOF'
+function number get_constant() {
+    return 100;
+}
+EOF
+
+cat > "$TMP_DIR/import_b.pb" <<'EOF'
+import "import_c.pb";
+
+function number add_constant(number x) {
+    return x + get_constant();
+}
+EOF
+
+cat > "$TMP_DIR/import_a.pb" <<'EOF'
+import "import_b.pb";
+
+function number main() {
+    print add_constant(23);
+    return 0;
+}
+EOF
+
+if "$COMPILER" build "$TMP_DIR/import_a.pb" -o "$TMP_DIR/import_a" \
+    >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/import_a")" = "123" ]; then
+    pass "nested chained imports"
+else
+    fail "nested chained imports"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: diamond import (A -> B, C; B -> D; C -> D)
+cat > "$TMP_DIR/diamond_d.pb" <<'EOF'
+function number base_value() {
+    return 10;
+}
+EOF
+
+cat > "$TMP_DIR/diamond_b.pb" <<'EOF'
+import "diamond_d.pb";
+
+function number b_val() {
+    return base_value() + 5;
+}
+EOF
+
+cat > "$TMP_DIR/diamond_c.pb" <<'EOF'
+import "diamond_d.pb";
+
+function number c_val() {
+    return base_value() + 20;
+}
+EOF
+
+cat > "$TMP_DIR/diamond_a.pb" <<'EOF'
+import "diamond_b.pb";
+import "diamond_c.pb";
+
+function number main() {
+    print b_val() + c_val();
+    return 0;
+}
+EOF
+
+if "$COMPILER" build "$TMP_DIR/diamond_a.pb" -o "$TMP_DIR/diamond_a" \
+    >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/diamond_a")" = "45" ]; then
+    pass "diamond import deduplication"
+else
+    fail "diamond import deduplication"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: circular import (A -> B -> A)
+cat > "$TMP_DIR/circ_b.pb" <<'EOF'
+import "circ_a.pb";
+
+function number from_b() {
+    return 77;
+}
+EOF
+
+cat > "$TMP_DIR/circ_a.pb" <<'EOF'
+import "circ_b.pb";
+
+function number main() {
+    print from_b();
+    return 0;
+}
+EOF
+
+if "$COMPILER" build "$TMP_DIR/circ_a.pb" -o "$TMP_DIR/circ_a" \
+    >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/circ_a")" = "77" ]; then
+    pass "circular import resolution"
+else
+    fail "circular import resolution"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: reject non-existent import file
+cat > "$TMP_DIR/bad_import.pb" <<'EOF'
+import "non_existent_module.pb";
+
+function number main() {
+    return 0;
+}
+EOF
+
+if ! "$COMPILER" build "$TMP_DIR/bad_import.pb" \
+    -o "$TMP_DIR/bad_import" >"$TMP_DIR/log" 2>&1 &&
+    grep -q "failed to import" "$TMP_DIR/log" &&
+    [ ! -e "$TMP_DIR/bad_import" ]; then
+    pass "reject non-existent imported file"
+else
+    fail "reject non-existent imported file"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: reject duplicate symbol name across imported files
+cat > "$TMP_DIR/dup_mod1.pb" <<'EOF'
+function number duplicate_symbol() {
+    return 1;
+}
+EOF
+
+cat > "$TMP_DIR/dup_mod2.pb" <<'EOF'
+function number duplicate_symbol() {
+    return 2;
+}
+EOF
+
+cat > "$TMP_DIR/dup_main.pb" <<'EOF'
+import "dup_mod1.pb";
+import "dup_mod2.pb";
+
+function number main() {
+    return 0;
+}
+EOF
+
+if ! "$COMPILER" build "$TMP_DIR/dup_main.pb" \
+    -o "$TMP_DIR/dup_main" >"$TMP_DIR/log" 2>&1 &&
+    grep -q "top-level name is already declared" "$TMP_DIR/log" &&
+    [ ! -e "$TMP_DIR/dup_main" ]; then
+    pass "reject name collision across imports"
+else
+    fail "reject name collision across imports"
+    cat "$TMP_DIR/log"
+fi
+
 echo "Driver tests: $PASS passed, $FAIL failed"
 
 [ "$FAIL" -eq 0 ]

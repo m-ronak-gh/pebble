@@ -121,11 +121,33 @@ semantic-bounds-test: $(CODEGEN_TEST_BIN)
 	done; \
 	rm -f semantic-bounds-test.log
 
-test: smoke native-test driver-test
+LEXER_TEST_BIN = pebble-lexer-test
+PARSER_TEST_BIN = pebble-parser-test
+SEMANTIC_TEST_BIN = pebble-semantic-test
+
+lexer-test:
+	$(CC) $(CFLAGS) compiler/lexer/lexer.c compiler/lexer/lexer_test.c -o $(LEXER_TEST_BIN)
+	./$(LEXER_TEST_BIN)
+	@rm -f $(LEXER_TEST_BIN)
+
+parser-test:
+	$(CC) $(CFLAGS) compiler/lexer/lexer.c compiler/ast/ast.c compiler/parser/parser.c compiler/parser/parser-test.c -o $(PARSER_TEST_BIN)
+	./$(PARSER_TEST_BIN)
+	@rm -f $(PARSER_TEST_BIN)
+
+semantic-test:
+	$(CC) $(CFLAGS) compiler/lexer/lexer.c compiler/ast/ast.c compiler/parser/parser.c compiler/semantic/semantic.c compiler/semantic/semantic-test.c -o $(SEMANTIC_TEST_BIN)
+	./$(SEMANTIC_TEST_BIN)
+	@rm -f $(SEMANTIC_TEST_BIN)
+
+unit-tests: lexer-test parser-test semantic-test
+
+test: unit-tests smoke native-test driver-test
 
 driver-test: peb
 	./tests/driver_test.sh ./peb
 
 clean:
 	rm -f $(PEBBLE) $(SMOKE) pebble-smoke.o pebble-smoke-native \
-		$(CODEGEN_TEST_BIN) $(CODEGEN_IR) $(CODEGEN_EXE)
+		$(CODEGEN_TEST_BIN) $(CODEGEN_IR) $(CODEGEN_EXE) \
+		$(LEXER_TEST_BIN) $(PARSER_TEST_BIN) $(SEMANTIC_TEST_BIN)

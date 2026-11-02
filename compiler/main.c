@@ -69,6 +69,206 @@ static char *read_file(const char *path)
     return buffer;
 }
 
+typedef struct {
+    char *path;
+    char *content;
+} LoadedSource;
+
+typedef struct {
+    LoadedSource *items;
+    size_t count;
+    size_t capacity;
+} SourceManager;
+
+static int source_manager_has(const SourceManager *sm, const char *canonical_path)
+{
+    for (size_t i = 0; i < sm->count; ++i) {
+        if (strcmp(sm->items[i].path, canonical_path) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int source_manager_add(SourceManager *sm, char *canonical_path, char *content)
+{
+    if (sm->count >= sm->capacity) {
+        size_t new_cap = sm->capacity == 0 ? 8 : sm->capacity * 2;
+        LoadedSource *new_items = realloc(sm->items, new_cap * sizeof(LoadedSource));
+        if (new_items == NULL) return 0;
+        sm->items = new_items;
+        sm->capacity = new_cap;
+    }
+    sm->items[sm->count].path = canonical_path;
+    sm->items[sm->count].content = content;
+    sm->count++;
+    return 1;
+}
+
+static void source_manager_free(SourceManager *sm)
+{
+    for (size_t i = 0; i < sm->count; ++i) {
+        free(sm->items[i].path);
+        free(sm->items[i].content);
+    }
+    free(sm->items);
+    sm->items = NULL;
+    sm->count = 0;
+    sm->capacity = 0;
+}
+
+static char *get_directory(const char *filepath)
+{
+    const char *last_slash = strrchr(filepath, '/');
+#ifdef _WIN32
+    const char *last_bslash = strrchr(filepath, '\\');
+    if (last_bslash != NULL && (last_slash == NULL || last_bslash > last_slash)) {
+        last_slash = last_bslash;
+    }
+#endif
+    if (last_slash == NULL) {
+        char *dot = malloc(2);
+        if (dot != NULL) {
+            dot[0] = '.';
+            dot[1] = '\0';
+        }
+        return dot;
+    }
+    size_t len = (size_t)(last_slash - filepath);
+    char *dir = malloc(len + 1);
+    if (dir != NULL) {
+        memcpy(dir, filepath, len);
+        dir[len] = '\0';
+    }
+    return dir;
+}
+
+static char *join_paths(const char *dir, const char *rel, size_t rel_len)
+{
+    size_t dir_len = strlen(dir);
+    char *res = malloc(dir_len + rel_len + 2);
+    if (res == NULL) return NULL;
+    snprintf(res, dir_len + rel_len + 2, "%s/%.*s", dir, (int)rel_len, rel);
+    return res;
+}
+
+static char *resolve_canonical_path(const char *path)
+{
+#ifdef _WIN32
+    return _fullpath(NULL, path, 0);
+#else
+    return realpath(path, NULL);
+#endif
+}
+
+static int resolve_imports(ASTNode *program, const char *current_file_path, SourceManager *sm)
+{
+    char *dir = get_directory(current_file_path);
+    if (dir == NULL) return 0;
+
+    size_t i = 0;
+    while (i < program->data.program.statement_count) {
+        ASTNode *stmt = program->data.program.statements[i];
+        if (stmt == NULL || stmt->kind != AST_IMPORT) {
+            i++;
+            continue;
+        }
+
+        const char *rel_path = stmt->data.import_decl.path;
+        size_t rel_len = stmt->data.import_decl.path_length;
+        if (rel_len >= 2 && rel_path[0] == '"' && rel_path[rel_len - 1] == '"') {
+            rel_path += 1;
+            rel_len -= 2;
+        }
+
+        char *joined = join_paths(dir, rel_path, rel_len);
+        if (joined == NULL) {
+            free(dir);
+            return 0;
+        }
+
+        char *canonical = resolve_canonical_path(joined);
+        const char *lookup_path = canonical ? canonical : joined;
+
+        if (source_manager_has(sm, lookup_path)) {
+            free(joined);
+            free(canonical);
+            i++;
+            continue;
+        }
+
+        char *content = read_file(joined);
+        if (content == NULL) {
+            fprintf(stderr, "peb: failed to import '%.*s'\n", (int)rel_len, rel_path);
+            free(joined);
+            free(canonical);
+            free(dir);
+            return 0;
+        }
+
+        char *stored_path = canonical ? canonical : strdup(joined);
+        free(joined);
+        if (stored_path == NULL) {
+            free(content);
+            free(dir);
+            return 0;
+        }
+
+        if (!source_manager_add(sm, stored_path, content)) {
+            free(stored_path);
+            free(content);
+            free(dir);
+            return 0;
+        }
+
+        Parser imported_parser;
+        parser_init(&imported_parser, content);
+        ASTNode *imported_prog = parser_parse_program(&imported_parser);
+        if (imported_prog == NULL) {
+            fprintf(stderr, "peb: parsing imported file failed\n");
+            free(dir);
+            return 0;
+        }
+
+        if (!resolve_imports(imported_prog, stored_path, sm)) {
+            ast_free(imported_prog);
+            free(dir);
+            return 0;
+        }
+
+        size_t imported_stmt_count = imported_prog->data.program.statement_count;
+        if (imported_stmt_count > 0) {
+            size_t new_total = program->data.program.statement_count + imported_stmt_count;
+            ASTNode **new_stmts = realloc(program->data.program.statements,
+                                          new_total * sizeof(ASTNode *));
+            if (new_stmts == NULL) {
+                ast_free(imported_prog);
+                free(dir);
+                return 0;
+            }
+            program->data.program.statements = new_stmts;
+
+            for (size_t j = 0; j < imported_stmt_count; ++j) {
+                ASTNode *s = imported_prog->data.program.statements[j];
+                if (s != NULL && s->kind != AST_IMPORT) {
+                    program->data.program.statements[program->data.program.statement_count++] = s;
+                } else {
+                    ast_free(s);
+                }
+            }
+
+            imported_prog->data.program.statements = NULL;
+            imported_prog->data.program.statement_count = 0;
+        }
+
+        ast_free(imported_prog);
+        i++;
+    }
+
+    free(dir);
+    return 1;
+}
+
 static char *default_output_name(const char *source)
 {
     size_t length = strlen(source);
@@ -247,15 +447,25 @@ static int link_object(const char *object_path, const char *output_path)
 static int compile_source(const char *source_path, const char *output_path,
                           int keep_ir)
 {
+    SourceManager sm = {0};
+
     char *source = read_file(source_path);
     if (source == NULL) {
+        return 1;
+    }
+
+    char *root_canonical = resolve_canonical_path(source_path);
+    char *root_stored = root_canonical ? root_canonical : strdup(source_path);
+    if (root_stored == NULL || !source_manager_add(&sm, root_stored, source)) {
+        free(root_stored);
+        free(source);
         return 1;
     }
 
     if (remove(output_path) != 0 && errno != ENOENT) {
         fprintf(stderr, "peb: cannot remove old output '%s': %s\n",
                 output_path, strerror(errno));
-        free(source);
+        source_manager_free(&sm);
         return 1;
     }
 
@@ -264,7 +474,14 @@ static int compile_source(const char *source_path, const char *output_path,
     ASTNode *program = parser_parse_program(&parser);
     if (program == NULL) {
         fprintf(stderr, "peb: parsing failed; executable not produced\n");
-        free(source);
+        source_manager_free(&sm);
+        return 1;
+    }
+
+    if (!resolve_imports(program, source_path, &sm)) {
+        fprintf(stderr, "peb: import resolution failed; executable not produced\n");
+        ast_free(program);
+        source_manager_free(&sm);
         return 1;
     }
 
@@ -272,7 +489,7 @@ static int compile_source(const char *source_path, const char *output_path,
     if (semantic == NULL) {
         fprintf(stderr, "peb: semantic analysis failed; executable not produced\n");
         ast_free(program);
-        free(source);
+        source_manager_free(&sm);
         return 1;
     }
 
@@ -292,14 +509,14 @@ static int compile_source(const char *source_path, const char *output_path,
         fprintf(stderr, "peb: program must define exactly one function number main()\n");
         semantic_free(semantic);
         ast_free(program);
-        free(source);
+        source_manager_free(&sm);
         return 1;
     }
     if (main_function->data.function_decl.parameter_count != 0) {
         fprintf(stderr, "peb: entry point main() must not have parameters\n");
         semantic_free(semantic);
         ast_free(program);
-        free(source);
+        source_manager_free(&sm);
         return 1;
     }
     if (main_function->data.function_decl.return_type.kind != AST_TYPE_NUMBER ||
@@ -307,7 +524,7 @@ static int compile_source(const char *source_path, const char *output_path,
         fprintf(stderr, "peb: entry point must return number\n");
         semantic_free(semantic);
         ast_free(program);
-        free(source);
+        source_manager_free(&sm);
         return 1;
     }
 
@@ -316,7 +533,7 @@ static int compile_source(const char *source_path, const char *output_path,
         fprintf(stderr, "peb: could not initialize code generator\n");
         semantic_free(semantic);
         ast_free(program);
-        free(source);
+        source_manager_free(&sm);
         return 1;
     }
 
@@ -346,7 +563,7 @@ static int compile_source(const char *source_path, const char *output_path,
         codegen_free(codegen);
         semantic_free(semantic);
         ast_free(program);
-        free(source);
+        source_manager_free(&sm);
         return 1;
     }
 
@@ -360,7 +577,7 @@ static int compile_source(const char *source_path, const char *output_path,
         codegen_free(codegen);
         semantic_free(semantic);
         ast_free(program);
-        free(source);
+        source_manager_free(&sm);
         return 1;
     }
     snprintf(object_path, output_len + 3, "%s.o", output_path);
@@ -385,7 +602,7 @@ static int compile_source(const char *source_path, const char *output_path,
     codegen_free(codegen);
     semantic_free(semantic);
     ast_free(program);
-    free(source);
+    source_manager_free(&sm);
     return ok ? 0 : 1;
 }
 

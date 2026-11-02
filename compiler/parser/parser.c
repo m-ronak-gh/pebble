@@ -1763,9 +1763,16 @@ static ASTNode *parse_import_stmt(Parser *parser)
 
     advance(parser);
 
+    const char *start = path_token.start;
+    size_t length = path_token.length;
+    if (length >= 2 && start[0] == '"' && start[length - 1] == '"') {
+        start += 1;
+        length -= 2;
+    }
+
     return ast_new_import(
-        path_token.start,
-        path_token.length,
+        start,
+        length,
         import_token.line,
         import_token.column
     );
