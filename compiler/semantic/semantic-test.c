@@ -116,5 +116,38 @@ int main(void)
         1
     );
 
+    pass &= run("free allocated pointer",
+        "function number main() { "
+            "free(alloc(8)); "
+            "return 0; "
+        "}",
+        1
+    );
+
+    pass &= run("free string",
+        "function number main() { "
+            "string s \"hello\"; "
+            "free(s); "
+            "return 0; "
+        "}",
+        1
+    );
+
+    pass &= run("free invalid number",
+        "function number main() { "
+            "free(42); "
+            "return 0; "
+        "}",
+        0
+    );
+
+    pass &= run("free missing argument",
+        "function number main() { "
+            "free(); "
+            "return 0; "
+        "}",
+        0
+    );
+
     return pass ? 0 : 1;
 }

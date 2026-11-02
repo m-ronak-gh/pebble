@@ -203,27 +203,39 @@ static int emit_object(LLVMModuleRef module, const char *object_path)
 
 static int link_object(const char *object_path, const char *output_path)
 {
+    const char *runtime_path = "runtime/pebble_runtime.c";
     char *object_q = shell_quote(object_path);
     char *output_q = shell_quote(output_path);
-    if (object_q == NULL || output_q == NULL) {
+    char *runtime_q = shell_quote(runtime_path);
+
+    if (object_q == NULL || output_q == NULL || runtime_q == NULL) {
         fprintf(stderr, "peb: out of memory preparing linker command\n");
         free(object_q);
         free(output_q);
+        free(runtime_q);
         return 0;
     }
 
-    size_t length = strlen(object_q) + strlen(output_q) + 32;
+    size_t length = strlen(object_q) +
+                    strlen(output_q) +
+                    strlen(runtime_q) + 40;
+
     char *command = malloc(length);
     if (command == NULL) {
         free(object_q);
         free(output_q);
+        free(runtime_q);
         return 0;
     }
-    snprintf(command, length, "cc -no-pie %s -o %s", object_q, output_q);
+
+    snprintf(command, length, "cc -no-pie %s %s -o %s",
+             object_q, runtime_q, output_q);
+
     int status = system(command);
     free(command);
     free(object_q);
     free(output_q);
+    free(runtime_q);
 
     if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         fprintf(stderr, "peb: system linker failed\n");

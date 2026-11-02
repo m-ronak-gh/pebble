@@ -378,6 +378,60 @@ else
     cat "$TMP_DIR/log"
 fi
 
+# Test: allocate and free heap memory at runtime.
+cat > "$TMP_DIR/allocator.pb" <<'EOF'
+function number main() {
+    free(alloc(64));
+    print "allocator test passed";
+    return 0;
+}
+EOF
+
+if "$COMPILER" build "$TMP_DIR/allocator.pb" -o "$TMP_DIR/allocator" \
+    >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/allocator")" = "allocator test passed" ]; then
+    pass "runtime allocation and deallocation"
+else
+    fail "runtime allocation and deallocation"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: alloc() requires exactly one argument.
+cat > "$TMP_DIR/bad_alloc.pb" <<'EOF'
+function number main() {
+    alloc();
+    return 0;
+}
+EOF
+
+if ! "$COMPILER" build "$TMP_DIR/bad_alloc.pb" \
+    -o "$TMP_DIR/bad_alloc" >"$TMP_DIR/log" 2>&1 &&
+    grep -q "alloc() expects one number argument" "$TMP_DIR/log" &&
+    [ ! -e "$TMP_DIR/bad_alloc" ]; then
+    pass "reject alloc with missing argument"
+else
+    fail "reject alloc with missing argument"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: free() must receive a pointer or string.
+cat > "$TMP_DIR/bad_free.pb" <<'EOF'
+function number main() {
+    free(42);
+    return 0;
+}
+EOF
+
+if ! "$COMPILER" build "$TMP_DIR/bad_free.pb" \
+    -o "$TMP_DIR/bad_free" >"$TMP_DIR/log" 2>&1 &&
+    grep -q "free() expects a pointer or string argument" "$TMP_DIR/log" &&
+    [ ! -e "$TMP_DIR/bad_free" ]; then
+    pass "reject free with invalid argument type"
+else
+    fail "reject free with invalid argument type"
+    cat "$TMP_DIR/log"
+fi
+
 echo "Driver tests: $PASS passed, $FAIL failed"
 
 [ "$FAIL" -eq 0 ]

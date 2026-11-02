@@ -81,8 +81,21 @@ int main(int argc, char **argv)
                 "number[4] values;"
                 "return values[0];"
             "}";
+    } else if (strcmp(argv[1], "alloc-free") == 0) {
+        source =
+            "function number main() {"
+                "free(alloc(64));"
+                "return 0;"
+            "}";
+    } else if (strcmp(argv[1], "free-string") == 0) {
+        source =
+            "function number main() {"
+                "string s \"hello\";"
+                "free(s);"
+                "return 0;"
+            "}";
     } else {
-        fprintf(stderr, "usage: %s [valid|negative|upper-literal|upper|multi|decimal-array|bool-array|char-array|zero-array]\n", argv[0]);
+        fprintf(stderr, "usage: %s [valid|negative|upper-literal|upper|multi|decimal-array|bool-array|char-array|zero-array|alloc-free|free-string]\n", argv[0]);
         return 2;
     }
 

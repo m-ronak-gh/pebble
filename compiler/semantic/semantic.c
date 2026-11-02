@@ -1092,7 +1092,7 @@ static TypeInfo *analyze_builtin_call(
             semantic_error(
                 a->ctx,
                 node,
-                "free() expects one pointer argument"
+                "free() expects one pointer or string argument"
             );
 
             return error_type(a->ctx, node);
@@ -1104,11 +1104,13 @@ static TypeInfo *analyze_builtin_call(
                 node->data.call.arguments[0]
             );
 
-        if (ptr->kind != SEM_TYPE_POINTER) {
+        if (ptr->kind != SEM_TYPE_POINTER &&
+            ptr->kind != SEM_TYPE_STRING) {
+
             semantic_error(
                 a->ctx,
                 node,
-                "free() expects a value returned by alloc()"
+                "free() expects a pointer or string argument"
             );
 
             return error_type(a->ctx, node);

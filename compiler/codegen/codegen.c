@@ -34,6 +34,16 @@ static void codegen_while(
     ASTNode *node
 );
 
+static LLVMValueRef codegen_builtin_alloc(
+    Codegen *codegen,
+    ASTNode *expression
+);
+
+static LLVMValueRef codegen_builtin_free(
+    Codegen *codegen,
+    ASTNode *expression
+);
+
 static void codegen_repeat(Codegen *codegen, ASTNode *node);
 static void codegen_for(Codegen *codegen, ASTNode *node);
 
@@ -568,6 +578,26 @@ LLVMValueRef codegen_expression(
             if (callee_node == NULL || callee_node->kind != AST_IDENTIFIER) {
                 CODEGEN_ERROR(codegen, "codegen: only direct function calls are supported\n");
                 return NULL;
+            }
+
+            if (callee_node->data.identifier.length == 5 &&
+                memcmp(
+                    callee_node->data.identifier.start,
+                    "alloc",
+                    5
+                ) == 0) {
+
+                return codegen_builtin_alloc(codegen, expression);
+            }
+
+            if (callee_node->data.identifier.length == 4 &&
+                memcmp(
+                    callee_node->data.identifier.start,
+                    "free",
+                    4
+                ) == 0) {
+
+                return codegen_builtin_free(codegen, expression);
             }
 
             char *name = malloc(callee_node->data.identifier.length + 1);
@@ -1191,6 +1221,217 @@ static LLVMValueRef codegen_declare_printf(
         "printf",
         type
     );
+}
+
+static LLVMTypeRef codegen_pebble_alloc_type(Codegen *codegen)
+{
+    LLVMTypeRef pointer_type =
+        LLVMPointerType(
+            LLVMInt8TypeInContext(codegen->context),
+            0
+        );
+
+    LLVMTypeRef parameters[] = {
+        LLVMInt64TypeInContext(codegen->context)
+    };
+
+    return LLVMFunctionType(
+        pointer_type,
+        parameters,
+        1,
+        0
+    );
+}
+
+static LLVMValueRef codegen_declare_pebble_alloc(Codegen *codegen)
+{
+    LLVMTypeRef function_type =
+        codegen_pebble_alloc_type(codegen);
+
+    LLVMValueRef function =
+        LLVMGetNamedFunction(codegen->module, "pebble_alloc");
+
+    if (function != NULL) {
+        if (LLVMGlobalGetValueType(function) != function_type) {
+            CODEGEN_ERROR(
+                codegen,
+                "codegen: incompatible declaration of pebble_alloc\n"
+            );
+            return NULL;
+        }
+
+        return function;
+    }
+
+    return LLVMAddFunction(
+        codegen->module,
+        "pebble_alloc",
+        function_type
+    );
+}
+
+static LLVMTypeRef codegen_pebble_free_type(Codegen *codegen)
+{
+    LLVMTypeRef pointer_type =
+        LLVMPointerType(
+            LLVMInt8TypeInContext(codegen->context),
+            0
+        );
+
+    return LLVMFunctionType(
+        LLVMVoidTypeInContext(codegen->context),
+        &pointer_type,
+        1,
+        0
+    );
+}
+
+static LLVMValueRef codegen_declare_pebble_free(Codegen *codegen)
+{
+    LLVMTypeRef function_type =
+        codegen_pebble_free_type(codegen);
+
+    LLVMValueRef function =
+        LLVMGetNamedFunction(codegen->module, "pebble_free");
+
+    if (function != NULL) {
+        if (LLVMGlobalGetValueType(function) != function_type) {
+            CODEGEN_ERROR(
+                codegen,
+                "codegen: incompatible declaration of pebble_free\n"
+            );
+            return NULL;
+        }
+
+        return function;
+    }
+
+    return LLVMAddFunction(
+        codegen->module,
+        "pebble_free",
+        function_type
+    );
+}
+
+static LLVMValueRef codegen_builtin_alloc(
+    Codegen *codegen,
+    ASTNode *expression
+)
+{
+    if (expression->data.call.argument_count != 1) {
+        CODEGEN_ERROR(codegen, "codegen: alloc() expects one argument\n");
+        return NULL;
+    }
+
+    LLVMValueRef size =
+        codegen_expression(
+            codegen,
+            expression->data.call.arguments[0]
+        );
+
+    if (size == NULL) {
+        return NULL;
+    }
+
+    LLVMTypeRef number_type =
+        LLVMInt64TypeInContext(codegen->context);
+
+    if (LLVMTypeOf(size) != number_type) {
+        CODEGEN_ERROR(codegen, "codegen: alloc() argument must be number\n");
+        return NULL;
+    }
+
+    LLVMValueRef function =
+        codegen_declare_pebble_alloc(codegen);
+
+    if (function == NULL) {
+        return NULL;
+    }
+
+    return LLVMBuildCall2(
+        codegen->builder,
+        codegen_pebble_alloc_type(codegen),
+        function,
+        &size,
+        1,
+        "alloc.tmp"
+    );
+}
+
+static LLVMValueRef codegen_builtin_free(
+    Codegen *codegen,
+    ASTNode *expression
+)
+{
+    if (expression->data.call.argument_count != 1) {
+        CODEGEN_ERROR(codegen, "codegen: free() expects one argument\n");
+        return NULL;
+    }
+
+    ASTNode *argument_node =
+        expression->data.call.arguments[0];
+
+    SemanticType argument_type;
+
+    if (!semantic_type_of(
+            codegen->semantic,
+            argument_node,
+            &argument_type)) {
+
+        CODEGEN_ERROR(
+            codegen,
+            "codegen: could not determine free() argument type\n"
+        );
+        return NULL;
+    }
+
+    LLVMValueRef argument =
+        codegen_expression(codegen, argument_node);
+
+    if (argument == NULL) {
+        return NULL;
+    }
+
+    if (argument_type.kind == SEM_TYPE_STRING) {
+        argument = LLVMBuildExtractValue(
+            codegen->builder,
+            argument,
+            1,
+            "free.string.data"
+        );
+    } else if (argument_type.kind != SEM_TYPE_POINTER) {
+        CODEGEN_ERROR(
+            codegen,
+            "codegen: free() expects a pointer or string\n"
+        );
+        return NULL;
+    }
+
+    if (LLVMGetTypeKind(LLVMTypeOf(argument)) != LLVMPointerTypeKind) {
+        CODEGEN_ERROR(
+            codegen,
+            "codegen: free() argument is not an LLVM pointer\n"
+        );
+        return NULL;
+    }
+
+    LLVMValueRef function =
+        codegen_declare_pebble_free(codegen);
+
+    if (function == NULL) {
+        return NULL;
+    }
+
+    LLVMBuildCall2(
+        codegen->builder,
+        codegen_pebble_free_type(codegen),
+        function,
+        &argument,
+        1,
+        ""
+    );
+
+    return NULL;
 }
 
 /*
