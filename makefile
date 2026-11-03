@@ -145,7 +145,7 @@ unit-tests: lexer-test parser-test semantic-test
 test: unit-tests smoke native-test driver-test
 
 driver-test: peb
-	./tests/driver_test.sh ./peb
+	bash ./tests/driver_test.sh ./peb
 
 PLATFORM ?= $(shell uname -s | tr '[:upper:]' '[:lower:]')-$(shell uname -m)
 DIST_DIR = dist/pebble-$(PLATFORM)

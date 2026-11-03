@@ -62,7 +62,7 @@ jobs:
           install: >-
             mingw-w64-clang-x86_64-clang
             mingw-w64-clang-x86_64-llvm
-            mingw-w64-clang-x86_64-make
+            make
             git
 
       # --- Build and test on Linux & macOS ---
