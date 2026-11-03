@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #ifndef PATH_MAX
 #if defined(MAX_PATH)
@@ -164,6 +165,8 @@ static char *get_directory(const char *filepath)
     return dir;
 }
 
+static int file_exists(const char *path);
+
 static char *join_paths(const char *dir, const char *rel, size_t rel_len)
 {
     size_t dir_len = strlen(dir);
@@ -171,6 +174,143 @@ static char *join_paths(const char *dir, const char *rel, size_t rel_len)
     if (res == NULL) return NULL;
     snprintf(res, dir_len + rel_len + 2, "%s/%.*s", dir, (int)rel_len, rel);
     return res;
+}
+
+static char *try_search_dir_for_name(const char *dir, const char *name, size_t name_len)
+{
+    /* 1. Try exact name */
+    char *p = join_paths(dir, name, name_len);
+    if (p != NULL) {
+        if (file_exists(p)) return p;
+        free(p);
+    }
+
+    /* 2. If no extension, try with .pb and .peb (both as-is and lowercase) */
+    int has_dot = 0;
+    for (size_t i = 0; i < name_len; ++i) {
+        if (name[i] == '.') { has_dot = 1; break; }
+    }
+
+    if (!has_dot) {
+        char buf[PATH_MAX];
+        snprintf(buf, sizeof(buf), "%.*s.pb", (int)name_len, name);
+        p = join_paths(dir, buf, strlen(buf));
+        if (p != NULL) {
+            if (file_exists(p)) return p;
+            free(p);
+        }
+
+        char lower[128];
+        if (name_len < sizeof(lower) - 5) {
+            for (size_t i = 0; i < name_len; ++i) {
+                lower[i] = (char)tolower((unsigned char)name[i]);
+            }
+            lower[name_len] = '\0';
+            strcat(lower, ".pb");
+            p = join_paths(dir, lower, strlen(lower));
+            if (p != NULL) {
+                if (file_exists(p)) return p;
+                free(p);
+            }
+        }
+
+        snprintf(buf, sizeof(buf), "%.*s.peb", (int)name_len, name);
+        p = join_paths(dir, buf, strlen(buf));
+        if (p != NULL) {
+            if (file_exists(p)) return p;
+            free(p);
+        }
+
+        if (name_len < sizeof(lower) - 6) {
+            for (size_t i = 0; i < name_len; ++i) {
+                lower[i] = (char)tolower((unsigned char)name[i]);
+            }
+            lower[name_len] = '\0';
+            strcat(lower, ".peb");
+            p = join_paths(dir, lower, strlen(lower));
+            if (p != NULL) {
+                if (file_exists(p)) return p;
+                free(p);
+            }
+        }
+    }
+
+    return NULL;
+}
+
+static char *find_import_path(const char *dir, const char *rel_path, size_t rel_len)
+{
+    int has_dot = 0;
+    for (size_t i = 0; i < rel_len; ++i) {
+        if (rel_path[i] == '.') { has_dot = 1; break; }
+    }
+
+    const char *sub = rel_path;
+    size_t sub_len = rel_len;
+    if (sub_len > 4 && strncmp(sub, "std/", 4) == 0) {
+        sub += 4;
+        sub_len -= 4;
+    } else if (sub_len > 7 && strncmp(sub, "stdlib/", 7) == 0) {
+        sub += 7;
+        sub_len -= 7;
+    }
+
+    const char *search_dirs[] = {
+        getenv("PEBBLE_STD_DIR"),
+        getenv("PEBBLE_STDLIB_DIR"),
+        "lib/pebble/std",
+        "stdlib",
+        "../lib/pebble/std",
+        "../stdlib",
+        "../../lib/pebble/std",
+        "../../stdlib",
+        "/usr/local/lib/pebble/std",
+        "/usr/lib/pebble/std",
+        NULL
+    };
+
+    /* 1. Stdlib identifier imports (e.g. import Math or import String without extension):
+     * search standard library directories first so they do not collide with local test files. */
+    if (!has_dot) {
+        for (size_t s = 0; s < sizeof(search_dirs) / sizeof(search_dirs[0]); ++s) {
+            const char *sdir = search_dirs[s];
+            if (sdir == NULL || sdir[0] == '\0') continue;
+
+            char *found = try_search_dir_for_name(sdir, rel_path, rel_len);
+            if (found != NULL) return found;
+
+            if (sub != rel_path) {
+                found = try_search_dir_for_name(sdir, sub, sub_len);
+                if (found != NULL) return found;
+            }
+        }
+    }
+
+    /* 2. User library imports (e.g. import "xyz.pb") or fallback:
+     * try project-relative to importing file first. */
+    char *found = try_search_dir_for_name(dir, rel_path, rel_len);
+    if (found != NULL) {
+        return found;
+    }
+
+    /* 3. Fallback search in stdlib directories for quoted stdlib imports like import "math.pb" */
+    if (has_dot) {
+        for (size_t s = 0; s < sizeof(search_dirs) / sizeof(search_dirs[0]); ++s) {
+            const char *sdir = search_dirs[s];
+            if (sdir == NULL || sdir[0] == '\0') continue;
+
+            found = try_search_dir_for_name(sdir, rel_path, rel_len);
+            if (found != NULL) return found;
+
+            if (sub != rel_path) {
+                found = try_search_dir_for_name(sdir, sub, sub_len);
+                if (found != NULL) return found;
+            }
+        }
+    }
+
+    /* Fall back to project-relative so error reporting shows the original path */
+    return join_paths(dir, rel_path, rel_len);
 }
 
 static char *resolve_canonical_path(const char *path)
@@ -202,7 +342,7 @@ static int resolve_imports(ASTNode *program, const char *current_file_path, Sour
             rel_len -= 2;
         }
 
-        char *joined = join_paths(dir, rel_path, rel_len);
+        char *joined = find_import_path(dir, rel_path, rel_len);
         if (joined == NULL) {
             free(dir);
             return 0;
@@ -636,6 +776,9 @@ static int link_object(const char *object_path, const char *output_path, const c
 
     args[argc++] = object_path;
     args[argc++] = runtime_path;
+#if !defined(_WIN32)
+    args[argc++] = "-lm";
+#endif
     args[argc++] = "-o";
     args[argc++] = output_path;
     args[argc] = NULL;

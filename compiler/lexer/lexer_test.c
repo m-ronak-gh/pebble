@@ -42,6 +42,7 @@ static const char *token_name(TokenKind kind)
         case TOKEN_TRUE: return "TRUE";
         case TOKEN_FALSE: return "FALSE";
         case TOKEN_PRINT: return "PRINT";
+        case TOKEN_EXTERN: return "EXTERN";
 
         case TOKEN_PLUS: return "PLUS";
         case TOKEN_MINUS: return "MINUS";

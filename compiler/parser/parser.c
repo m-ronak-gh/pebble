@@ -1867,26 +1867,35 @@ static ASTNode *parse_import_stmt(Parser *parser)
     Token import_token = parser->current;
     advance(parser);
 
-    if (parser->current.kind != TOKEN_STRING_LITERAL) {
-        parser_error(parser, "expected string literal after import");
+    if (parser->current.kind != TOKEN_STRING_LITERAL &&
+        parser->current.kind != TOKEN_IDENTIFIER &&
+        parser->current.kind != TOKEN_STRING) {
+        parser_error(parser, "expected module name or string literal after import");
         return NULL;
     }
 
     Token path_token = parser->current;
     advance(parser);
 
-    if (parser->current.kind != TOKEN_SEMICOLON) {
+    if (parser->current.kind == TOKEN_SEMICOLON) {
+        advance(parser);
+    } else if (parser->current.kind != TOKEN_FUNCTION &&
+               parser->current.kind != TOKEN_EXTERN &&
+               parser->current.kind != TOKEN_STRUCT &&
+               parser->current.kind != TOKEN_ENUM &&
+               parser->current.kind != TOKEN_IMPORT &&
+               parser->current.kind != TOKEN_EOF) {
         parser_error(parser, "expected ';' after import");
         return NULL;
     }
 
-    advance(parser);
-
     const char *start = path_token.start;
     size_t length = path_token.length;
-    if (length >= 2 && start[0] == '"' && start[length - 1] == '"') {
-        start += 1;
-        length -= 2;
+    if (path_token.kind == TOKEN_STRING_LITERAL) {
+        if (length >= 2 && start[0] == '"' && start[length - 1] == '"') {
+            start += 1;
+            length -= 2;
+        }
     }
 
     return ast_new_import(

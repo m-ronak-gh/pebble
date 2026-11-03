@@ -1220,6 +1220,146 @@ else
     cat "$TMP_DIR/log"
 fi
 
+# Test: stdlib string module
+EXPECTED=$(printf 'Hello World\n11\nHello\ne\n12345\n987')
+if "$COMPILER" build tests/programs/test_stdlib_string.pb -o "$TMP_DIR/stdlib_string" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/stdlib_string")" = "$EXPECTED" ]; then
+    pass "stdlib string: concat, length, substring, charAt, toNumber, toString"
+else
+    fail "stdlib string: concat, length, substring, charAt, toNumber, toString"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: stdlib math module
+EXPECTED=$(printf '42\n42\n10\n20\n5.000000\n256.000000\n3.000000\n4.000000')
+if "$COMPILER" build tests/programs/test_stdlib_math.pb -o "$TMP_DIR/stdlib_math" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/stdlib_math")" = "$EXPECTED" ]; then
+    pass "stdlib math: abs, min, max, sqrt, pow, floor, ceil"
+else
+    fail "stdlib math: abs, min, max, sqrt, pow, floor, ceil"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: stdlib io module
+EXPECTED=$(printf '1\nPebble File Content')
+if "$COMPILER" build tests/programs/test_stdlib_io.pb -o "$TMP_DIR/stdlib_io" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/stdlib_io")" = "$EXPECTED" ]; then
+    pass "stdlib io: writeFile and readFile"
+else
+    fail "stdlib io: writeFile and readFile"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: stdlib time module
+EXPECTED=$(printf '1\n1')
+if "$COMPILER" build tests/programs/test_stdlib_time.pb -o "$TMP_DIR/stdlib_time" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/stdlib_time")" = "$EXPECTED" ]; then
+    pass "stdlib time: now and sleep"
+else
+    fail "stdlib time: now and sleep"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: stdlib random module
+EXPECTED=$(printf '1\n1')
+if "$COMPILER" build tests/programs/test_stdlib_random.pb -o "$TMP_DIR/stdlib_random" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/stdlib_random")" = "$EXPECTED" ]; then
+    pass "stdlib random: seed and randomInt"
+else
+    fail "stdlib random: seed and randomInt"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: stdlib system module
+EXPECTED=$(printf '1\n1')
+if "$COMPILER" build tests/programs/test_stdlib_system.pb -o "$TMP_DIR/stdlib_system" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/stdlib_system")" = "$EXPECTED" ]; then
+    pass "stdlib system: argsCount and argsGet"
+else
+    fail "stdlib system: argsCount and argsGet"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: stdlib multi-module integration
+EXPECTED=$(printf 'Result: 123\n1')
+if "$COMPILER" build tests/programs/test_stdlib_all.pb -o "$TMP_DIR/stdlib_all" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/stdlib_all")" = "$EXPECTED" ]; then
+    pass "stdlib integration: multiple stdlib modules in one program"
+else
+    fail "stdlib integration: multiple stdlib modules in one program"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: import Math (unquoted identifier)
+cat > "$TMP_DIR/import_math_bare.pb" << 'EOF'
+import Math
+
+function number main() {
+    print abs(-99);
+    decimal d sqrt(144.0);
+    print d;
+    return 0;
+}
+EOF
+
+EXPECTED=$(printf '99\n12.000000')
+if "$COMPILER" build "$TMP_DIR/import_math_bare.pb" -o "$TMP_DIR/import_math_bare" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/import_math_bare")" = "$EXPECTED" ]; then
+    pass "import Math (unquoted identifier without semicolon)"
+else
+    fail "import Math (unquoted identifier without semicolon)"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: import String; (unquoted identifier with semicolon)
+cat > "$TMP_DIR/import_string_bare.pb" << 'EOF'
+import String;
+
+function number main() {
+    string s concat("Pebble ", "Language");
+    print s;
+    print charAt(s, 0);
+    return 0;
+}
+EOF
+
+EXPECTED=$(printf 'Pebble Language\nP')
+if "$COMPILER" build "$TMP_DIR/import_string_bare.pb" -o "$TMP_DIR/import_string_bare" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/import_string_bare")" = "$EXPECTED" ]; then
+    pass "import String (unquoted identifier with semicolon)"
+else
+    fail "import String (unquoted identifier with semicolon)"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: user defined import "xyz.pb" alongside import Math
+cat > "$TMP_DIR/xyz.pb" << 'EOF'
+function number helper(number x) {
+    return x * 10;
+}
+EOF
+
+cat > "$TMP_DIR/user_and_std.pb" << 'EOF'
+import "xyz.pb";
+import Math;
+
+function number main() {
+    number h helper(5);
+    print h;
+    print abs(-h);
+    return 0;
+}
+EOF
+
+EXPECTED=$(printf '50\n50')
+if "$COMPILER" build "$TMP_DIR/user_and_std.pb" -o "$TMP_DIR/user_and_std" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/user_and_std")" = "$EXPECTED" ]; then
+    pass "user defined import 'xyz.pb' alongside import Math"
+else
+    fail "user defined import 'xyz.pb' alongside import Math"
+    cat "$TMP_DIR/log"
+fi
+
 echo "Driver tests: $PASS passed, $FAIL failed"
 
 [ "$FAIL" -eq 0 ]
