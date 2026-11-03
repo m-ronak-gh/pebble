@@ -7,7 +7,12 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
-#if defined(__unix__) || defined(__APPLE__)
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#elif defined(__unix__) || defined(__APPLE__)
 #include <dlfcn.h>
 #endif
 /* =========================================================================
@@ -329,11 +334,44 @@ double pebble_math_ceil(double x)
  */
 int64_t pebble_time_now(void)
 {
+#if defined(_WIN32)
+
+    FILETIME ft;
+    ULARGE_INTEGER ticks;
+
+    GetSystemTimeAsFileTime(&ft);
+
+    ticks.LowPart = ft.dwLowDateTime;
+    ticks.HighPart = ft.dwHighDateTime;
+
+    /*
+     * Windows FILETIME counts 100-nanosecond intervals
+     * since January 1, 1601.
+     *
+     * Unix time starts January 1, 1970.
+     */
+    const uint64_t WINDOWS_TO_UNIX_EPOCH = 116444736000000000ULL;
+
+    if (ticks.QuadPart < WINDOWS_TO_UNIX_EPOCH) {
+        return 0;
+    }
+
+    return (int64_t)(
+        (ticks.QuadPart - WINDOWS_TO_UNIX_EPOCH) / 10000ULL
+    );
+
+#else
+
     struct timespec ts;
+
     if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
         return 0;
     }
-    return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
+
+    return (int64_t)ts.tv_sec * 1000
+         + (int64_t)(ts.tv_nsec / 1000000);
+
+#endif
 }
 
 /*
@@ -341,11 +379,37 @@ int64_t pebble_time_now(void)
  */
 void pebble_time_sleep(int64_t ms)
 {
-    if (ms <= 0) return;
+    if (ms <= 0) {
+        return;
+    }
+
+#if defined(_WIN32)
+
+    /*
+     * Sleep() accepts a DWORD. Split very long durations into
+     * chunks, avoiding INFINITE (0xFFFFFFFF).
+     */
+    uint64_t remaining = (uint64_t)ms;
+
+    while (remaining > 0) {
+        DWORD chunk = remaining >= (uint64_t)INFINITE
+                    ? INFINITE - 1
+                    : (DWORD)remaining;
+
+        Sleep(chunk);
+        remaining -= chunk;
+    }
+
+#else
+
     struct timespec ts;
+
     ts.tv_sec  = ms / 1000;
     ts.tv_nsec = (ms % 1000) * 1000000;
+
     nanosleep(&ts, NULL);
+
+#endif
 }
 
 /* =========================================================================
