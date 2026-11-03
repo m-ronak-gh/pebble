@@ -1085,6 +1085,141 @@ else
     pass "reject uninitialized primitive scalar"
 fi
 
+# Test: short-circuit evaluation of &&
+cat > "$TMP_DIR/sc_and.pb" << 'EOF'
+function bool never() {
+    panic("short-circuit failed: second operand was evaluated");
+    return true;
+}
+
+function number main() {
+    bool f false;
+    if (f && never()) {
+        print 1;
+    } else {
+        print 0;
+    }
+    return 0;
+}
+EOF
+
+if "$COMPILER" build "$TMP_DIR/sc_and.pb" -o "$TMP_DIR/sc_and" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/sc_and")" = "0" ]; then
+    pass "short-circuit && skips second operand when first is false"
+else
+    fail "short-circuit && skips second operand when first is false"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: short-circuit evaluation of ||
+cat > "$TMP_DIR/sc_or.pb" << 'EOF'
+function bool never() {
+    panic("short-circuit failed: second operand was evaluated");
+    return false;
+}
+
+function number main() {
+    bool t true;
+    if (t || never()) {
+        print 1;
+    } else {
+        print 0;
+    }
+    return 0;
+}
+EOF
+
+if "$COMPILER" build "$TMP_DIR/sc_or.pb" -o "$TMP_DIR/sc_or" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/sc_or")" = "1" ]; then
+    pass "short-circuit || skips second operand when first is true"
+else
+    fail "short-circuit || skips second operand when first is true"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: empty string equality
+cat > "$TMP_DIR/empty_str.pb" << 'EOF'
+function number main() {
+    string a "";
+    string b "";
+    if (a == b) { print 1; } else { print 0; }
+    if (a != "x") { print 1; } else { print 0; }
+    if ("" == "") { print 1; } else { print 0; }
+    return 0;
+}
+EOF
+
+EXPECTED=$(printf '1\n1\n1')
+if "$COMPILER" build "$TMP_DIR/empty_str.pb" -o "$TMP_DIR/empty_str" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/empty_str")" = "$EXPECTED" ]; then
+    pass "empty string equality"
+else
+    fail "empty string equality"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: exit() with specific exit code
+cat > "$TMP_DIR/exit_code.pb" << 'EOF'
+function number main() {
+    print 99;
+    exit(5);
+    print 100;
+    return 0;
+}
+EOF
+
+set +e
+"$COMPILER" build "$TMP_DIR/exit_code.pb" -o "$TMP_DIR/exit_code" >"$TMP_DIR/log" 2>&1
+EXIT_BUILD=$?
+set -e
+if [ "$EXIT_BUILD" -eq 0 ]; then
+    set +e
+    "$TMP_DIR/exit_code" >/dev/null 2>&1
+    EXIT_CODE=$?
+    set -e
+    if [ "$EXIT_CODE" -eq 5 ]; then
+        pass "exit() terminates with specific exit code"
+    else
+        fail "exit() terminates with specific exit code (got $EXIT_CODE, expected 5)"
+    fi
+else
+    fail "exit() terminates with specific exit code (build failed)"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: struct value copy semantics (modifying copy does not affect original)
+cat > "$TMP_DIR/struct_copy.pb" << 'EOF'
+struct Point {
+    number x;
+    number y;
+}
+
+function number main() {
+    Point orig;
+    orig.x = 10;
+    orig.y = 20;
+
+    Point copy;
+    copy = orig;
+    copy.x = 99;
+
+    print orig.x;
+    print orig.y;
+    print copy.x;
+    print copy.y;
+    return 0;
+}
+EOF
+
+EXPECTED=$(printf '10\n20\n99\n20')
+if "$COMPILER" build "$TMP_DIR/struct_copy.pb" -o "$TMP_DIR/struct_copy" >"$TMP_DIR/log" 2>&1 &&
+    [ "$("$TMP_DIR/struct_copy")" = "$EXPECTED" ]; then
+    pass "struct value copy: modifying copy does not affect original"
+else
+    fail "struct value copy: modifying copy does not affect original"
+    cat "$TMP_DIR/log"
+fi
+
 echo "Driver tests: $PASS passed, $FAIL failed"
 
 [ "$FAIL" -eq 0 ]
