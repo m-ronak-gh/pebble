@@ -1,6 +1,6 @@
 
 #!/usr/bin/env bash
-set -eu
+set -euo pipefail
 
 COMPILER="${1:-./peb}"
 TMP_DIR="$(mktemp -d)"
@@ -19,6 +19,11 @@ fail() {
     FAIL=$((FAIL + 1))
 }
 
+# Run a program and normalize Windows CRLF output for comparisons.
+run_normalized() {
+    "$@" | sed 's/\r$//'
+}
+
 # Test 1: basic native compilation and execution
 cat > "$TMP_DIR/basic.pb" <<'EOF'
 function number main() {
@@ -29,7 +34,7 @@ EOF
 
 if "$COMPILER" build "$TMP_DIR/basic.pb" -o "$TMP_DIR/basic" \
     >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/basic")" = "42" ]; then
+    [ "$(run_normalized "$TMP_DIR/basic")" = "42" ]; then
     pass "basic compile and execute"
 else
     fail "basic compile and execute"
@@ -72,7 +77,7 @@ EOF
 EXPECTED=$(printf '25\n1\n3\n2\n1\n7\n7\n7')
 if "$COMPILER" build "$TMP_DIR/control.pb" -o "$TMP_DIR/control" \
     >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/control")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/control")" = "$EXPECTED" ]; then
     pass "control flow and arithmetic"
 else
     fail "control flow and arithmetic"
@@ -101,7 +106,7 @@ EOF
 EXPECTED=$(printf 'H\ne\nl\nl\no')
 if "$COMPILER" build "$TMP_DIR/chars.pb" -o "$TMP_DIR/chars" \
     >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/chars")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/chars")" = "$EXPECTED" ]; then
     pass "character arrays"
 else
     fail "character arrays"
@@ -267,7 +272,7 @@ EXPECTED=$(printf 'Hello\n\nFirst\nSecond\nFunction round trip')
 
 if "$COMPILER" build "$TMP_DIR/string.pb" -o "$TMP_DIR/string" \
     >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/string")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/string")" = "$EXPECTED" ]; then
     pass "string literal and variable printing"
 else
     fail "string literal and variable printing"
@@ -306,7 +311,7 @@ EOF
 EXPECTED=$(printf '42\n10\n120')
 if "$COMPILER" build "$TMP_DIR/functions.pb" -o "$TMP_DIR/functions" \
     >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/functions")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/functions")" = "$EXPECTED" ]; then
     pass "function parameters, forward calls, and recursion"
 else
     fail "function parameters, forward calls, and recursion"
@@ -327,7 +332,7 @@ EOF
 
 if "$COMPILER" build "$TMP_DIR/zero_arg.pb" -o "$TMP_DIR/zero_arg" \
     >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/zero_arg")" = "42" ]; then
+    [ "$(run_normalized "$TMP_DIR/zero_arg")" = "42" ]; then
     pass "zero-argument function call"
 else
     fail "zero-argument function call"
@@ -389,7 +394,7 @@ EOF
 
 if "$COMPILER" build "$TMP_DIR/allocator.pb" -o "$TMP_DIR/allocator" \
     >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/allocator")" = "allocator test passed" ]; then
+    [ "$(run_normalized "$TMP_DIR/allocator")" = "allocator test passed" ]; then
     pass "runtime allocation and deallocation"
 else
     fail "runtime allocation and deallocation"
@@ -452,7 +457,7 @@ EOF
 
 if "$COMPILER" build "$TMP_DIR/import_basic.pb" -o "$TMP_DIR/import_basic" \
     >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/import_basic")" = "42" ]; then
+    [ "$(run_normalized "$TMP_DIR/import_basic")" = "42" ]; then
     pass "basic import and function call"
 else
     fail "basic import and function call"
@@ -485,7 +490,7 @@ EOF
 
 if "$COMPILER" build "$TMP_DIR/import_a.pb" -o "$TMP_DIR/import_a" \
     >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/import_a")" = "123" ]; then
+    [ "$(run_normalized "$TMP_DIR/import_a")" = "123" ]; then
     pass "nested chained imports"
 else
     fail "nested chained imports"
@@ -527,7 +532,7 @@ EOF
 
 if "$COMPILER" build "$TMP_DIR/diamond_a.pb" -o "$TMP_DIR/diamond_a" \
     >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/diamond_a")" = "45" ]; then
+    [ "$(run_normalized "$TMP_DIR/diamond_a")" = "45" ]; then
     pass "diamond import deduplication"
 else
     fail "diamond import deduplication"
@@ -554,7 +559,7 @@ EOF
 
 if "$COMPILER" build "$TMP_DIR/circ_a.pb" -o "$TMP_DIR/circ_a" \
     >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/circ_a")" = "77" ]; then
+    [ "$(run_normalized "$TMP_DIR/circ_a")" = "77" ]; then
     pass "circular import resolution"
 else
     fail "circular import resolution"
@@ -622,7 +627,7 @@ function number main() {
 }
 EOF
 
-RUN_OUT="$("$COMPILER" run "$TMP_DIR/run_test.pb" 2>/dev/null)"
+RUN_OUT="$(run_normalized "$COMPILER" run "$TMP_DIR/run_test.pb" 2>/dev/null)"
 if [ "$RUN_OUT" = "99" ]; then
     pass "peb run execution"
 else
@@ -632,7 +637,7 @@ fi
 # Test: output path containing spaces
 if "$COMPILER" build "$TMP_DIR/basic.pb" -o "$TMP_DIR/output with spaces" \
     >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/output with spaces")" = "42" ]; then
+    [ "$(run_normalized "$TMP_DIR/output with spaces")" = "42" ]; then
     pass "output path containing spaces"
 else
     fail "output path containing spaces"
@@ -650,7 +655,7 @@ EOF
 
 if "$COMPILER" build "$TMP_DIR/dir with spaces/space_src.pb" -o "$TMP_DIR/space_src_out" \
     >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/space_src_out")" = "101" ]; then
+    [ "$(run_normalized "$TMP_DIR/space_src_out")" = "101" ]; then
     pass "source path containing spaces"
 else
     fail "source path containing spaces"
@@ -662,7 +667,7 @@ ABS_COMPILER="$(cd "$(dirname "$COMPILER")" && pwd)/$(basename "$COMPILER")"
 mkdir -p "$TMP_DIR/unrelated_cwd"
 if (cd "$TMP_DIR/unrelated_cwd" && "$ABS_COMPILER" build "$TMP_DIR/basic.pb" -o "$TMP_DIR/remote_build") \
     >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/remote_build")" = "42" ]; then
+    [ "$(run_normalized "$TMP_DIR/remote_build")" = "42" ]; then
     pass "runtime discovery outside installation directory"
 else
     fail "runtime discovery outside installation directory"
@@ -674,7 +679,7 @@ mkdir -p "$TMP_DIR/custom_runtime"
 cp runtime/pebble_runtime.c runtime/pebble_runtime.h "$TMP_DIR/custom_runtime/"
 if (PEBBLE_RUNTIME_DIR="$TMP_DIR/custom_runtime" "$COMPILER" build "$TMP_DIR/basic.pb" -o "$TMP_DIR/custom_rt_build") \
     >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/custom_rt_build")" = "42" ]; then
+    [ "$(run_normalized "$TMP_DIR/custom_rt_build")" = "42" ]; then
     pass "runtime discovery with PEBBLE_RUNTIME_DIR"
 else
     fail "runtime discovery with PEBBLE_RUNTIME_DIR"
@@ -747,7 +752,7 @@ EOF
 
 EXPECTED=$(printf '0\n0\n10\n20\n30\n10')
 if "$COMPILER" build "$TMP_DIR/struct_basic.pb" -o "$TMP_DIR/struct_basic" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/struct_basic")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/struct_basic")" = "$EXPECTED" ]; then
     pass "structs basic read/write, zero-init, and copy"
 else
     fail "structs basic read/write, zero-init, and copy"
@@ -788,7 +793,7 @@ EOF
 
 EXPECTED=$(printf '1\n20\n100\n200\n300')
 if "$COMPILER" build "$TMP_DIR/struct_nested.pb" -o "$TMP_DIR/struct_nested" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/struct_nested")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/struct_nested")" = "$EXPECTED" ]; then
     pass "nested structs and struct arrays"
 else
     fail "nested structs and struct arrays"
@@ -824,7 +829,7 @@ EOF
 
 EXPECTED=$(printf '3\n4\n25')
 if "$COMPILER" build "$TMP_DIR/struct_fn.pb" -o "$TMP_DIR/struct_fn" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/struct_fn")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/struct_fn")" = "$EXPECTED" ]; then
     pass "structs in function parameters and return values"
 else
     fail "structs in function parameters and return values"
@@ -871,7 +876,7 @@ EOF
 
 EXPECTED=$(printf '0\n1\n1\n1\n1')
 if "$COMPILER" build "$TMP_DIR/enum_test.pb" -o "$TMP_DIR/enum_test" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/enum_test")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/enum_test")" = "$EXPECTED" ]; then
     pass "enums declaration, values, comparisons, functions, and print"
 else
     fail "enums declaration, values, comparisons, functions, and print"
@@ -895,7 +900,7 @@ function number main() {
 EOF
 
 if "$COMPILER" build "$TMP_DIR/void_return.pb" -o "$TMP_DIR/void_return" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/void_return")" = "42" ]; then
+    [ "$(run_normalized "$TMP_DIR/void_return")" = "42" ]; then
     pass "void functions and bare return"
 else
     fail "void functions and bare return"
@@ -935,7 +940,7 @@ EOF
 
 EXPECTED=$(printf '2\n7\n5\n-1\n16\n8\n1\n1')
 if "$COMPILER" build "$TMP_DIR/operators.pb" -o "$TMP_DIR/operators" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/operators")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/operators")" = "$EXPECTED" ]; then
     pass "logical and bitwise operators"
 else
     fail "logical and bitwise operators"
@@ -989,7 +994,7 @@ EOF
 
 EXPECTED=$(printf '5\n5\nnumber\nbool\nstring\nNode\nState\n1\n1')
 if "$COMPILER" build "$TMP_DIR/builtins.pb" -o "$TMP_DIR/builtins" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/builtins")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/builtins")" = "$EXPECTED" ]; then
     pass "builtins length, typeof, and string equality"
 else
     fail "builtins length, typeof, and string equality"
@@ -1104,7 +1109,7 @@ function number main() {
 EOF
 
 if "$COMPILER" build "$TMP_DIR/sc_and.pb" -o "$TMP_DIR/sc_and" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/sc_and")" = "0" ]; then
+    [ "$(run_normalized "$TMP_DIR/sc_and")" = "0" ]; then
     pass "short-circuit && skips second operand when first is false"
 else
     fail "short-circuit && skips second operand when first is false"
@@ -1130,7 +1135,7 @@ function number main() {
 EOF
 
 if "$COMPILER" build "$TMP_DIR/sc_or.pb" -o "$TMP_DIR/sc_or" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/sc_or")" = "1" ]; then
+    [ "$(run_normalized "$TMP_DIR/sc_or")" = "1" ]; then
     pass "short-circuit || skips second operand when first is true"
 else
     fail "short-circuit || skips second operand when first is true"
@@ -1151,7 +1156,7 @@ EOF
 
 EXPECTED=$(printf '1\n1\n1')
 if "$COMPILER" build "$TMP_DIR/empty_str.pb" -o "$TMP_DIR/empty_str" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/empty_str")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/empty_str")" = "$EXPECTED" ]; then
     pass "empty string equality"
 else
     fail "empty string equality"
@@ -1213,7 +1218,7 @@ EOF
 
 EXPECTED=$(printf '10\n20\n99\n20')
 if "$COMPILER" build "$TMP_DIR/struct_copy.pb" -o "$TMP_DIR/struct_copy" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/struct_copy")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/struct_copy")" = "$EXPECTED" ]; then
     pass "struct value copy: modifying copy does not affect original"
 else
     fail "struct value copy: modifying copy does not affect original"
@@ -1223,7 +1228,7 @@ fi
 # Test: stdlib string module
 EXPECTED=$(printf 'Hello World\n11\nHello\ne\n12345\n987')
 if "$COMPILER" build tests/programs/test_stdlib_string.pb -o "$TMP_DIR/stdlib_string" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/stdlib_string")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/stdlib_string")" = "$EXPECTED" ]; then
     pass "stdlib string: concat, length, substring, charAt, toNumber, toString"
 else
     fail "stdlib string: concat, length, substring, charAt, toNumber, toString"
@@ -1233,7 +1238,7 @@ fi
 # Test: stdlib math module
 EXPECTED=$(printf '42\n42\n10\n20\n5.000000\n256.000000\n3.000000\n4.000000')
 if "$COMPILER" build tests/programs/test_stdlib_math.pb -o "$TMP_DIR/stdlib_math" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/stdlib_math")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/stdlib_math")" = "$EXPECTED" ]; then
     pass "stdlib math: abs, min, max, sqrt, pow, floor, ceil"
 else
     fail "stdlib math: abs, min, max, sqrt, pow, floor, ceil"
@@ -1243,7 +1248,7 @@ fi
 # Test: stdlib io module
 EXPECTED=$(printf '1\nPebble File Content')
 if "$COMPILER" build tests/programs/test_stdlib_io.pb -o "$TMP_DIR/stdlib_io" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/stdlib_io")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/stdlib_io")" = "$EXPECTED" ]; then
     pass "stdlib io: writeFile and readFile"
 else
     fail "stdlib io: writeFile and readFile"
@@ -1253,7 +1258,7 @@ fi
 # Test: stdlib time module
 EXPECTED=$(printf '1\n1')
 if "$COMPILER" build tests/programs/test_stdlib_time.pb -o "$TMP_DIR/stdlib_time" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/stdlib_time")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/stdlib_time")" = "$EXPECTED" ]; then
     pass "stdlib time: now and sleep"
 else
     fail "stdlib time: now and sleep"
@@ -1263,7 +1268,7 @@ fi
 # Test: stdlib random module
 EXPECTED=$(printf '1\n1')
 if "$COMPILER" build tests/programs/test_stdlib_random.pb -o "$TMP_DIR/stdlib_random" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/stdlib_random")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/stdlib_random")" = "$EXPECTED" ]; then
     pass "stdlib random: seed and randomInt"
 else
     fail "stdlib random: seed and randomInt"
@@ -1273,7 +1278,7 @@ fi
 # Test: stdlib system module
 EXPECTED=$(printf '3\nalpha\nbeta with spaces\ngamma\n0\n0')
 if "$COMPILER" build tests/programs/test_stdlib_system.pb -o "$TMP_DIR/stdlib_system" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/stdlib_system" alpha "beta with spaces" gamma)" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/stdlib_system" alpha "beta with spaces" gamma)" = "$EXPECTED" ]; then
     pass "stdlib system: argsCount and argsGet with real CLI arguments"
 else
     fail "stdlib system: argsCount and argsGet with real CLI arguments"
@@ -1283,7 +1288,7 @@ fi
 # Test: stdlib multi-module integration
 EXPECTED=$(printf 'Result: 123\n1')
 if "$COMPILER" build tests/programs/test_stdlib_all.pb -o "$TMP_DIR/stdlib_all" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/stdlib_all")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/stdlib_all")" = "$EXPECTED" ]; then
     pass "stdlib integration: multiple stdlib modules in one program"
 else
     fail "stdlib integration: multiple stdlib modules in one program"
@@ -1304,7 +1309,7 @@ EOF
 
 EXPECTED=$(printf '99\n12.000000')
 if "$COMPILER" build "$TMP_DIR/import_math_bare.pb" -o "$TMP_DIR/import_math_bare" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/import_math_bare")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/import_math_bare")" = "$EXPECTED" ]; then
     pass "import Math (unquoted identifier without semicolon)"
 else
     fail "import Math (unquoted identifier without semicolon)"
@@ -1325,7 +1330,7 @@ EOF
 
 EXPECTED=$(printf 'Pebble Language\nP')
 if "$COMPILER" build "$TMP_DIR/import_string_bare.pb" -o "$TMP_DIR/import_string_bare" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/import_string_bare")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/import_string_bare")" = "$EXPECTED" ]; then
     pass "import String (unquoted identifier with semicolon)"
 else
     fail "import String (unquoted identifier with semicolon)"
@@ -1353,7 +1358,7 @@ EOF
 
 EXPECTED=$(printf '50\n50')
 if "$COMPILER" build "$TMP_DIR/user_and_std.pb" -o "$TMP_DIR/user_and_std" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/user_and_std")" = "$EXPECTED" ]; then
+    [ "$(run_normalized "$TMP_DIR/user_and_std")" = "$EXPECTED" ]; then
     pass "user defined import 'xyz.pb' alongside import Math"
 else
     fail "user defined import 'xyz.pb' alongside import Math"
