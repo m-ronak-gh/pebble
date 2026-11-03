@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include "pebble_runtime.h"
 
 #include <stddef.h>
@@ -8,8 +7,9 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#if defined(__unix__) || defined(__APPLE__)
 #include <dlfcn.h>
-
+#endif
 /* =========================================================================
  * Core allocation
  * ========================================================================= */
@@ -62,9 +62,18 @@ static PebbleString make_pebble_string(const char *s, int64_t len)
  * ========================================================================= */
 
 /*
- * pebble_io_input() -> string
- * Reads a line from stdin (strips trailing newline).
+ * pebble_io_print_string(data, length)
+ * Prints exactly length bytes followed by a newline.
  */
+void pebble_io_print_string(const char *data, int64_t length)
+{
+    if (data != NULL && length > 0) {
+        fwrite(data, 1, (size_t)length, stdout);
+    }
+
+    fputc('\n', stdout);
+}
+
 PebbleString pebble_io_input(void)
 {
     char buf[4096];
@@ -269,24 +278,35 @@ double pebble_math_pow(double base, double exp_val)
 {
 #if defined(__unix__) || defined(__APPLE__)
     static double (*real_pow)(double, double) = NULL;
+
     if (real_pow == NULL) {
         void *h = dlopen("libm.so.6", RTLD_LAZY);
         if (!h) h = dlopen("libm.so", RTLD_LAZY);
         if (!h) h = dlopen("libm.dylib", RTLD_LAZY);
-        if (h) real_pow = (double (*)(double, double))dlsym(h, "pow");
+
+        if (h) {
+            real_pow = (double (*)(double, double))dlsym(h, "pow");
+        }
     }
+
     if (real_pow != NULL) {
         return real_pow(base, exp_val);
     }
 #endif
+
     if (exp_val == 0.0) return 1.0;
     if (base == 0.0) return 0.0;
-    if (base > 0.0) return exp(exp_val * log(base));
+
+    if (base > 0.0) {
+        return exp(exp_val * log(base));
+    }
+
     if ((double)(int64_t)exp_val == exp_val) {
         int64_t n = (int64_t)exp_val;
         double r = exp(exp_val * log(-base));
         return (n % 2 != 0) ? -r : r;
     }
+
     return NAN;
 }
 

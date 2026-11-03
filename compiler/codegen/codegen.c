@@ -1942,7 +1942,7 @@ static LLVMTypeRef codegen_size_t_type(Codegen *codegen)
     );
 }
 
-static LLVMTypeRef codegen_fwrite_type(Codegen *codegen)
+static LLVMValueRef codegen_declare_io_print_string(Codegen *codegen)
 {
     LLVMTypeRef pointer_type =
         LLVMPointerType(
@@ -1950,85 +1950,42 @@ static LLVMTypeRef codegen_fwrite_type(Codegen *codegen)
             0
         );
 
-    LLVMTypeRef size_type = codegen_size_t_type(codegen);
-
     LLVMTypeRef parameters[] = {
         pointer_type,
-        size_type,
-        size_type,
-        pointer_type
+        LLVMInt64TypeInContext(codegen->context)
     };
 
-    return LLVMFunctionType(
-        size_type,
-        parameters,
-        4,
-        0
-    );
-}
+    LLVMTypeRef function_type =
+        LLVMFunctionType(
+            LLVMVoidTypeInContext(codegen->context),
+            parameters,
+            2,
+            0
+        );
 
-static LLVMValueRef codegen_declare_fwrite(Codegen *codegen)
-{
-    LLVMValueRef existing =
-        LLVMGetNamedFunction(codegen->module, "fwrite");
+    LLVMValueRef function =
+        LLVMGetNamedFunction(
+            codegen->module,
+            "pebble_io_print_string"
+        );
 
-    LLVMTypeRef function_type = codegen_fwrite_type(codegen);
-
-    if (existing != NULL) {
-        if (LLVMGlobalGetValueType(existing) != function_type) {
+    if (function != NULL) {
+        if (LLVMGlobalGetValueType(function) != function_type) {
             CODEGEN_ERROR(
                 codegen,
-                "codegen: incompatible declaration of fwrite\n"
+                "codegen: incompatible declaration of "
+                "pebble_io_print_string\n"
             );
             return NULL;
         }
 
-        return existing;
+        return function;
     }
 
     return LLVMAddFunction(
         codegen->module,
-        "fwrite",
+        "pebble_io_print_string",
         function_type
-    );
-}
-
-static LLVMValueRef codegen_stdout_stream(Codegen *codegen)
-{
-    LLVMTypeRef pointer_type =
-        LLVMPointerType(
-            LLVMInt8TypeInContext(codegen->context),
-            0
-        );
-
-    LLVMValueRef stdout_global =
-        LLVMGetNamedGlobal(codegen->module, "stdout");
-
-    if (stdout_global == NULL) {
-        stdout_global =
-            LLVMAddGlobal(
-                codegen->module,
-                pointer_type,
-                "stdout"
-            );
-
-        LLVMSetLinkage(
-            stdout_global,
-            LLVMExternalLinkage
-        );
-    } else if (LLVMGlobalGetValueType(stdout_global) != pointer_type) {
-        CODEGEN_ERROR(
-            codegen,
-            "codegen: incompatible declaration of stdout\n"
-        );
-        return NULL;
-    }
-
-    return LLVMBuildLoad2(
-        codegen->builder,
-        pointer_type,
-        stdout_global,
-        "stdout.stream"
     );
 }
 
@@ -2037,8 +1994,6 @@ static void codegen_print_string(
     LLVMValueRef value
 )
 {
-    LLVMTypeRef size_type = codegen_size_t_type(codegen);
-
     LLVMValueRef length =
         LLVMBuildExtractValue(
             codegen->builder,
@@ -2055,67 +2010,27 @@ static void codegen_print_string(
             "string.data"
         );
 
-    LLVMValueRef native_length =
-        LLVMBuildIntCast2(
-            codegen->builder,
-            length,
-            size_type,
-            0,
-            "string.native_length"
-        );
+    LLVMValueRef function =
+        codegen_declare_io_print_string(codegen);
 
-    LLVMValueRef fwrite_function =
-        codegen_declare_fwrite(codegen);
-
-    LLVMValueRef stdout_stream =
-        codegen_stdout_stream(codegen);
-
-    if (fwrite_function == NULL || stdout_stream == NULL) {
+    if (function == NULL) {
         return;
     }
 
-    LLVMTypeRef fwrite_type = codegen_fwrite_type(codegen);
+    LLVMTypeRef function_type =
+        LLVMGlobalGetValueType(function);
 
-    LLVMValueRef one =
-        LLVMConstInt(size_type, 1, 0);
-
-    LLVMValueRef string_arguments[] = {
+    LLVMValueRef arguments[] = {
         data,
-        one,
-        native_length,
-        stdout_stream
+        length
     };
 
     LLVMBuildCall2(
         codegen->builder,
-        fwrite_type,
-        fwrite_function,
-        string_arguments,
-        4,
-        ""
-    );
-
-    /* Print the newline separately, including for empty strings. */
-    LLVMValueRef newline =
-        LLVMBuildGlobalStringPtr(
-            codegen->builder,
-            "\n",
-            "newline"
-        );
-
-    LLVMValueRef newline_arguments[] = {
-        newline,
-        one,
-        one,
-        stdout_stream
-    };
-
-    LLVMBuildCall2(
-        codegen->builder,
-        fwrite_type,
-        fwrite_function,
-        newline_arguments,
-        4,
+        function_type,
+        function,
+        arguments,
+        2,
         ""
     );
 }

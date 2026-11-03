@@ -34,6 +34,7 @@ typedef struct {
 } PebbleString;
 
 /* IO module support */
+void pebble_io_print_string(const char *data, int64_t length);
 PebbleString pebble_io_input(void);
 PebbleString pebble_io_readFile(PebbleString path);
 int64_t pebble_io_writeFile(PebbleString path, PebbleString contents);
