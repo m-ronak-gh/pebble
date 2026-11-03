@@ -34,7 +34,8 @@ static const Keyword keywords[] = {
     { "true",     TOKEN_TRUE },
     { "false",    TOKEN_FALSE },
     { "null",     TOKEN_NULL },
-    { "print",    TOKEN_PRINT }
+    { "print",    TOKEN_PRINT },
+    { "extern",   TOKEN_EXTERN }
 };
 
 static const size_t keyword_count =

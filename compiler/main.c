@@ -767,10 +767,10 @@ static int compile_source(const char *source_path, const char *output_path,
         }
     }
 
-    /* Pass 1: declare all function signatures. */
+    /* Pass 1: declare all function signatures (including extern functions). */
     for (size_t i = 0; i < program->data.program.statement_count; ++i) {
         ASTNode *node = program->data.program.statements[i];
-        if (node != NULL && node->kind == AST_FUNCTION) {
+        if (node != NULL && (node->kind == AST_FUNCTION || node->kind == AST_EXTERN_FUNCTION)) {
             codegen_declare_function(codegen, node);
         }
     }

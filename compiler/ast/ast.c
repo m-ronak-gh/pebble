@@ -161,6 +161,14 @@ void ast_free(ASTNode *node)
             free(node->data.enum_decl.member_lengths);
             break;
 
+        case AST_EXTERN_FUNCTION:
+            for (size_t i = 0; i < node->data.function_decl.parameter_count; i++) {
+                ast_free(node->data.function_decl.parameters[i]);
+            }
+            free(node->data.function_decl.parameters);
+            free(node->data.function_decl.return_type.dimensions);
+            break;
+
         case AST_FUNCTION:
             for (size_t i = 0; i < node->data.function_decl.parameter_count; i++) {
                 ast_free(node->data.function_decl.parameters[i]);
@@ -965,6 +973,36 @@ ASTNode *ast_new_function(
     node->data.function_decl.parameter_count = parameter_count;
     node->data.function_decl.return_type = return_type;
     node->data.function_decl.body = body;
+
+    return node;
+}
+
+ASTNode *ast_new_extern_function(
+    const char *name,
+    size_t name_length,
+    ASTNode **parameters,
+    size_t parameter_count,
+    ASTType return_type,
+    size_t line,
+    size_t column
+)
+{
+    ASTNode *node = malloc(sizeof(ASTNode));
+
+    if (node == NULL) {
+        return NULL;
+    }
+
+    node->kind = AST_EXTERN_FUNCTION;
+    node->line = line;
+    node->column = column;
+
+    node->data.function_decl.name = name;
+    node->data.function_decl.name_length = name_length;
+    node->data.function_decl.parameters = parameters;
+    node->data.function_decl.parameter_count = parameter_count;
+    node->data.function_decl.return_type = return_type;
+    node->data.function_decl.body = NULL;
 
     return node;
 }

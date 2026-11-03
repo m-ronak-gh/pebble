@@ -2394,7 +2394,8 @@ static char *codegen_function_name(ASTNode *function)
 
 void codegen_declare_function(Codegen *codegen, ASTNode *function)
 {
-    if (codegen == NULL || function == NULL || function->kind != AST_FUNCTION) return;
+    if (codegen == NULL || function == NULL ||
+        (function->kind != AST_FUNCTION && function->kind != AST_EXTERN_FUNCTION)) return;
     char *name = codegen_function_name(function);
     if (name == NULL) {
         CODEGEN_ERROR(codegen, "fatal: failed to allocate function name\n");
@@ -2437,6 +2438,7 @@ void codegen_declare_function(Codegen *codegen, ASTNode *function)
 void codegen_function(Codegen *codegen, ASTNode *function)
 {
     if (codegen == NULL || function == NULL || function->kind != AST_FUNCTION) return;
+    /* AST_EXTERN_FUNCTION is declaration-only: codegen_declare_function handles it. */
     codegen_declare_function(codegen, function);
     if (codegen->has_error) return;
 

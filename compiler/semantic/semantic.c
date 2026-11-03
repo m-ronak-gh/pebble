@@ -2397,13 +2397,13 @@ static int declare_globals(
         size_t length = 0;
         SymbolKind kind;
 
-        if (node->kind == AST_FUNCTION) {
+        if (node->kind == AST_FUNCTION || node->kind == AST_EXTERN_FUNCTION) {
 
             name = node->data.function_decl.name;
             length = node->data.function_decl.name_length;
             kind = SYMBOL_FUNCTION;
 
-            if (text_equal(
+            if (node->kind == AST_FUNCTION && text_equal(
                     name,
                     length,
                     "main",
@@ -2627,7 +2627,12 @@ static int analyze_functions(
         ASTNode *node =
             ctx->program->data.program.statements[i];
 
-        if (node->kind != AST_FUNCTION) {
+        if (node->kind != AST_FUNCTION && node->kind != AST_EXTERN_FUNCTION) {
+            continue;
+        }
+
+        /* extern function: declaration only, no body to analyze */
+        if (node->kind == AST_EXTERN_FUNCTION) {
             continue;
         }
 

@@ -35,6 +35,7 @@ typedef enum {
     AST_REPEAT,
     AST_FOR,
 
+    AST_EXTERN_FUNCTION,
     AST_BREAK,
     AST_CONTINUE,
     AST_RETURN
@@ -263,6 +264,16 @@ ASTNode *ast_new_function(
     size_t parameter_count,
     ASTType return_type,
     ASTNode *body,
+    size_t line,
+    size_t column
+);
+
+ASTNode *ast_new_extern_function(
+    const char *name,
+    size_t name_length,
+    ASTNode **parameters,
+    size_t parameter_count,
+    ASTType return_type,
     size_t line,
     size_t column
 );

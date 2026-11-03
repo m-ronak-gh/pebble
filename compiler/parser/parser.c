@@ -51,6 +51,7 @@ static ASTNode *parse_function_decl(Parser *parser);
 static ASTNode *parse_struct_decl(Parser *parser);
 static ASTNode *parse_enum_decl(Parser *parser);
 static ASTNode *parse_import_stmt(Parser *parser);
+static ASTNode *parse_extern_function_decl(Parser *parser);
 static ASTNode *ast_new_null(size_t line, size_t column);
 static int parse_type(Parser *parser, ParsedType *type)
 {
@@ -913,6 +914,8 @@ ASTNode *parser_parse_program(Parser *parser)
 
         if (parser->current.kind == TOKEN_IMPORT) {
             declaration = parse_import_stmt(parser);
+        } else if (parser->current.kind == TOKEN_EXTERN) {
+            declaration = parse_extern_function_decl(parser);
         } else if (parser->current.kind == TOKEN_FUNCTION) {
             declaration = parse_function_decl(parser);
         } else if (parser->current.kind == TOKEN_STRUCT) {
@@ -1535,6 +1538,122 @@ fail:
 
     free(return_type.dimensions);
 
+    return NULL;
+}
+
+/*
+ * extern function <return_type> <name>(<params>);
+ * Declares an external C function callable from Pebble.
+ */
+static ASTNode *parse_extern_function_decl(Parser *parser)
+{
+    Token extern_token = parser->current;
+    advance(parser); /* consume "extern" */
+
+    if (parser->current.kind != TOKEN_FUNCTION) {
+        parser_error(parser, "expected \"function\" after \"extern\"");
+        return NULL;
+    }
+    advance(parser); /* consume "function" */
+
+    ParsedType return_type;
+    if (!parse_type(parser, &return_type)) {
+        return NULL;
+    }
+
+    if (parser->current.kind != TOKEN_IDENTIFIER) {
+        parser_error(parser, "expected function name after return type in extern declaration");
+        free(return_type.dimensions);
+        return NULL;
+    }
+    Token name_token = parser->current;
+    advance(parser);
+
+    if (parser->current.kind != TOKEN_LPAREN) {
+        parser_error(parser, "expected '(' after extern function name");
+        free(return_type.dimensions);
+        return NULL;
+    }
+    advance(parser);
+
+    ASTNode **parameters = NULL;
+    size_t parameter_count = 0;
+
+    if (parser->current.kind != TOKEN_RPAREN) {
+        for (;;) {
+            ParsedType parameter_type;
+            if (!parse_type(parser, &parameter_type)) {
+                goto extern_fail;
+            }
+            if (parser->current.kind != TOKEN_IDENTIFIER) {
+                parser_error(parser, "expected parameter name");
+                free(parameter_type.dimensions);
+                goto extern_fail;
+            }
+            Token parameter_name = parser->current;
+            advance(parser);
+            ASTNode *parameter = ast_new_var_decl(
+                0,
+                parameter_name.start,
+                parameter_name.length,
+                parameter_type,
+                NULL,
+                parameter_name.line,
+                parameter_name.column
+            );
+            if (parameter == NULL) {
+                free(parameter_type.dimensions);
+                parser_error(parser, "out of memory");
+                goto extern_fail;
+            }
+            ASTNode **new_parameters = realloc(
+                parameters,
+                (parameter_count + 1) * sizeof(ASTNode *)
+            );
+            if (new_parameters == NULL) {
+                ast_free(parameter);
+                parser_error(parser, "out of memory");
+                goto extern_fail;
+            }
+            parameters = new_parameters;
+            parameters[parameter_count++] = parameter;
+            if (parser->current.kind != TOKEN_COMMA) {
+                break;
+            }
+            advance(parser);
+        }
+    }
+
+    if (parser->current.kind != TOKEN_RPAREN) {
+        parser_error(parser, "expected ')' after extern parameters");
+        goto extern_fail;
+    }
+    advance(parser);
+
+    if (parser->current.kind != TOKEN_SEMICOLON) {
+        parser_error(parser, "expected ';' after extern function declaration");
+        goto extern_fail;
+    }
+    advance(parser);
+
+    return ast_new_extern_function(
+        name_token.start,
+        name_token.length,
+        parameters,
+        parameter_count,
+        return_type,
+        extern_token.line,
+        extern_token.column
+    );
+
+extern_fail:
+    if (parameters != NULL) {
+        for (size_t i = 0; i < parameter_count; i++) {
+            ast_free(parameters[i]);
+        }
+        free(parameters);
+    }
+    free(return_type.dimensions);
     return NULL;
 }
 
