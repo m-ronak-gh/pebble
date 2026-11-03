@@ -93,3 +93,17 @@ jobs:
           make CC=clang primitive-array-tests multidim-test bounds-test semantic-bounds-test
           echo "=== Creating release package ==="
           make CC=clang package
+          
+          echo "=== Windows diagnostic: first failing test ==="
+          bash -x tests/driver_test.sh ./peb > driver-trace.log 2>&1 || true
+
+          echo "=== First failure context ==="
+          grep -n -B 35 -A 15 "FAIL: control flow and arithmetic" driver-trace.log || true
+
+          echo "=== Runtime dependencies ==="
+          ldd ./peb || true
+
+          echo "=== Runtime output functions ==="
+          grep -n -A 35 -B 5 -E \
+            'pebble_io_print_string|pebble_print|pebble_io_|pebble_runtime_init' \
+            runtime/pebble_runtime.c || true
