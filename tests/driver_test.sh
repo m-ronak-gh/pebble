@@ -1227,32 +1227,53 @@ fi
 
 # Test: stdlib string module
 EXPECTED=$(printf 'Hello World\n11\nHello\ne\n12345\n987')
-if "$COMPILER" build tests/programs/test_stdlib_string.pb -o "$TMP_DIR/stdlib_string" >"$TMP_DIR/log" 2>&1 &&
-    [ "$(run_normalized "$TMP_DIR/stdlib_string")" = "$EXPECTED" ]; then
+ACTUAL=""
+EXIT_CODE=0
+ACTUAL="$(run_normalized "$TMP_DIR/stdlib_string")" || EXIT_CODE=$?
+
+if [ "$EXIT_CODE" -eq 0 ] && [ "$ACTUAL" = "$EXPECTED" ]; then
     pass "stdlib string: concat, length, substring, charAt, toNumber, toString"
 else
     fail "stdlib string: concat, length, substring, charAt, toNumber, toString"
-    cat "$TMP_DIR/log"
+    echo "Expected:"
+    printf '%s\n' "$EXPECTED"
+    echo "Actual:"
+    printf '%s\n' "$ACTUAL"
+    echo "Exit code: $EXIT_CODE"
 fi
 
 # Test: stdlib math module
 EXPECTED=$(printf '42\n42\n10\n20\n5.000000\n256.000000\n3.000000\n4.000000')
-if "$COMPILER" build tests/programs/test_stdlib_math.pb -o "$TMP_DIR/stdlib_math" >"$TMP_DIR/log" 2>&1 &&
-    [ "$(run_normalized "$TMP_DIR/stdlib_math")" = "$EXPECTED" ]; then
+ACTUAL=""
+EXIT_CODE=0
+ACTUAL="$(run_normalized "$TMP_DIR/stdlib_math")" || EXIT_CODE=$?
+
+if [ "$EXIT_CODE" -eq 0 ] && [ "$ACTUAL" = "$EXPECTED" ]; then
     pass "stdlib math: abs, min, max, sqrt, pow, floor, ceil"
 else
     fail "stdlib math: abs, min, max, sqrt, pow, floor, ceil"
-    cat "$TMP_DIR/log"
+    echo "Expected:"
+    printf '%s\n' "$EXPECTED"
+    echo "Actual:"
+    printf '%s\n' "$ACTUAL"
+    echo "Exit code: $EXIT_CODE"
 fi
 
 # Test: stdlib io module
 EXPECTED=$(printf '1\nPebble File Content')
-if "$COMPILER" build tests/programs/test_stdlib_io.pb -o "$TMP_DIR/stdlib_io" >"$TMP_DIR/log" 2>&1 &&
-    [ "$(run_normalized "$TMP_DIR/stdlib_io")" = "$EXPECTED" ]; then
+ACTUAL=""
+EXIT_CODE=0
+ACTUAL="$(run_normalized "$TMP_DIR/stdlib_io")" || EXIT_CODE=$?
+
+if [ "$EXIT_CODE" -eq 0 ] && [ "$ACTUAL" = "$EXPECTED" ]; then
     pass "stdlib io: writeFile and readFile"
 else
     fail "stdlib io: writeFile and readFile"
-    cat "$TMP_DIR/log"
+    echo "Expected:"
+    printf '%s\n' "$EXPECTED"
+    echo "Actual:"
+    printf '%s\n' "$ACTUAL"
+    echo "Exit code: $EXIT_CODE"
 fi
 
 # Test: stdlib time module
@@ -1277,22 +1298,36 @@ fi
 
 # Test: stdlib system module
 EXPECTED=$(printf '3\nalpha\nbeta with spaces\ngamma\n0\n0')
-if "$COMPILER" build tests/programs/test_stdlib_system.pb -o "$TMP_DIR/stdlib_system" >"$TMP_DIR/log" 2>&1 &&
-    [ "$(run_normalized "$TMP_DIR/stdlib_system" alpha "beta with spaces" gamma)" = "$EXPECTED" ]; then
+ACTUAL=""
+EXIT_CODE=0
+ACTUAL="$(run_normalized "$TMP_DIR/stdlib_system" alpha "beta with spaces" gamma)" || EXIT_CODE=$?
+
+if [ "$EXIT_CODE" -eq 0 ] && [ "$ACTUAL" = "$EXPECTED" ]; then
     pass "stdlib system: argsCount and argsGet with real CLI arguments"
 else
     fail "stdlib system: argsCount and argsGet with real CLI arguments"
-    cat "$TMP_DIR/log"
+    echo "Expected:"
+    printf '%s\n' "$EXPECTED"
+    echo "Actual:"
+    printf '%s\n' "$ACTUAL"
+    echo "Exit code: $EXIT_CODE"
 fi
 
 # Test: stdlib multi-module integration
 EXPECTED=$(printf 'Result: 123\n1')
-if "$COMPILER" build tests/programs/test_stdlib_all.pb -o "$TMP_DIR/stdlib_all" >"$TMP_DIR/log" 2>&1 &&
-    [ "$(run_normalized "$TMP_DIR/stdlib_all")" = "$EXPECTED" ]; then
+ACTUAL=""
+EXIT_CODE=0
+ACTUAL="$(run_normalized "$TMP_DIR/stdlib_all")" || EXIT_CODE=$?
+
+if [ "$EXIT_CODE" -eq 0 ] && [ "$ACTUAL" = "$EXPECTED" ]; then
     pass "stdlib integration: multiple stdlib modules in one program"
 else
     fail "stdlib integration: multiple stdlib modules in one program"
-    cat "$TMP_DIR/log"
+    echo "Expected:"
+    printf '%s\n' "$EXPECTED"
+    echo "Actual:"
+    printf '%s\n' "$ACTUAL"
+    echo "Exit code: $EXIT_CODE"
 fi
 
 # Test: import Math (unquoted identifier)
@@ -1329,12 +1364,19 @@ function number main() {
 EOF
 
 EXPECTED=$(printf 'Pebble Language\nP')
-if "$COMPILER" build "$TMP_DIR/import_string_bare.pb" -o "$TMP_DIR/import_string_bare" >"$TMP_DIR/log" 2>&1 &&
-    [ "$(run_normalized "$TMP_DIR/import_string_bare")" = "$EXPECTED" ]; then
+ACTUAL=""
+EXIT_CODE=0
+ACTUAL="$(run_normalized "$TMP_DIR/import_string_bare")" || EXIT_CODE=$?
+
+if [ "$EXIT_CODE" -eq 0 ] && [ "$ACTUAL" = "$EXPECTED" ]; then
     pass "import String (unquoted identifier with semicolon)"
 else
     fail "import String (unquoted identifier with semicolon)"
-    cat "$TMP_DIR/log"
+    echo "Expected:"
+    printf '%s\n' "$EXPECTED"
+    echo "Actual:"
+    printf '%s\n' "$ACTUAL"
+    echo "Exit code: $EXIT_CODE"
 fi
 
 # Test: user defined import "xyz.pb" alongside import Math
