@@ -755,10 +755,11 @@ static int emit_object(LLVMModuleRef module, const char *object_path)
     return ok;
 }
 
-static int link_object(const char *object_path, const char *output_path, const char *runtime_path)
+static int link_object(const char *object_path, const char *output_path,
+                        const char *runtime_path, const char *wrapper_path)
 {
     const char *linker = get_linker_command();
-    const char *args[16];
+    const char *args[18];
     int argc = 0;
 
     args[argc++] = linker;
@@ -776,6 +777,9 @@ static int link_object(const char *object_path, const char *output_path, const c
 
     args[argc++] = object_path;
     args[argc++] = runtime_path;
+    if (wrapper_path != NULL) {
+        args[argc++] = wrapper_path;
+    }
 #if !defined(_WIN32)
     args[argc++] = "-lm";
 #endif
@@ -941,13 +945,24 @@ static int compile_source(const char *source_path, const char *output_path,
         return 1;
     }
 
+    /* Rename the Pebble 'main' LLVM function to 'pebble_user_main' so we can
+     * provide an explicit C main() wrapper that initialises the runtime with
+     * argc/argv before calling user code. */
+    LLVMModuleRef mod = codegen_module(codegen);
+    LLVMValueRef user_main_fn = LLVMGetNamedFunction(mod, "main");
+    if (user_main_fn != NULL) {
+        LLVMSetValueName2(user_main_fn, "pebble_user_main", 16);
+    }
+
     size_t output_len = strlen(output_path);
     char *object_path = malloc(output_len + 3);
     char *ir_path = malloc(output_len + 4);
-    if (object_path == NULL || ir_path == NULL) {
+    char *wrapper_path = malloc(output_len + 12);
+    if (object_path == NULL || ir_path == NULL || wrapper_path == NULL) {
         fprintf(stderr, "peb: out of memory creating output paths\n");
         free(object_path);
         free(ir_path);
+        free(wrapper_path);
         free(runtime_path);
         codegen_free(codegen);
         semantic_free(semantic);
@@ -957,17 +972,44 @@ static int compile_source(const char *source_path, const char *output_path,
     }
     snprintf(object_path, output_len + 3, "%s.o", output_path);
     snprintf(ir_path, output_len + 4, "%s.ll", output_path);
+    snprintf(wrapper_path, output_len + 12, "%s_main.c", output_path);
+
+    /* Write the C main() wrapper that initialises the Pebble runtime and
+     * delegates to the user's compiled entry point. */
+    int wrapper_ok = 0;
+    {
+        FILE *wf = fopen(wrapper_path, "w");
+        if (wf != NULL) {
+            int write_ok = fprintf(wf,
+                "/* Auto-generated Pebble runtime entry-point wrapper. */\n"
+                "#include <stdint.h>\n"
+                "void pebble_runtime_init(int argc, char **argv);\n"
+                "int64_t pebble_user_main(void);\n"
+                "int main(int argc, char **argv) {\n"
+                "    pebble_runtime_init(argc, argv);\n"
+                "    return (int)pebble_user_main();\n"
+                "}\n") >= 0;
+
+            int close_ok = fclose(wf) == 0;
+            wrapper_ok = write_ok && close_ok;
+        }
+    }
 
     /* Never leave a stale executable that could be mistaken for this build. */
     (void)remove(output_path);
     int ok = 1;
-    if (keep_ir) {
+    if (!wrapper_ok) {
+        fprintf(stderr, "peb: failed to write main() wrapper\n");
+        ok = 0;
+    }
+    if (ok && keep_ir) {
         if (!codegen_write_ir(codegen, ir_path)) ok = 0;
     }
     if (ok) ok = emit_object(codegen_module(codegen), object_path);
-    if (ok) ok = link_object(object_path, output_path, runtime_path);
+    if (ok) ok = link_object(object_path, output_path, runtime_path, wrapper_path);
     free(runtime_path);
     (void)remove(object_path);
+    (void)remove(wrapper_path);
     if (!keep_ir) (void)remove(ir_path);
 
     if (ok) fprintf(stderr, "peb: built %s\n", output_path);

@@ -1271,12 +1271,12 @@ else
 fi
 
 # Test: stdlib system module
-EXPECTED=$(printf '1\n1')
+EXPECTED=$(printf '3\nalpha\nbeta with spaces\ngamma\n0\n0')
 if "$COMPILER" build tests/programs/test_stdlib_system.pb -o "$TMP_DIR/stdlib_system" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/stdlib_system")" = "$EXPECTED" ]; then
-    pass "stdlib system: argsCount and argsGet"
+    [ "$("$TMP_DIR/stdlib_system" alpha "beta with spaces" gamma)" = "$EXPECTED" ]; then
+    pass "stdlib system: argsCount and argsGet with real CLI arguments"
 else
-    fail "stdlib system: argsCount and argsGet"
+    fail "stdlib system: argsCount and argsGet with real CLI arguments"
     cat "$TMP_DIR/log"
 fi
 

@@ -64,7 +64,7 @@ void pebble_random_seed(int64_t n);
 int64_t pebble_random_int(int64_t min_val, int64_t max_val);
 
 /* System module support */
-void pebble_runtime_set_args(int argc, char **argv);
+void pebble_runtime_init(int argc, char **argv);
 int64_t pebble_system_args_count(void);
 PebbleString pebble_system_args_get(int64_t i);
 

@@ -359,30 +359,24 @@ int64_t pebble_random_int(int64_t min_val, int64_t max_val)
 static int    g_argc = 0;
 static char **g_argv = NULL;
 
-void pebble_runtime_set_args(int argc, char **argv)
+void pebble_runtime_init(int argc, char **argv)
 {
     g_argc = argc;
     g_argv = argv;
 }
 
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((constructor))
-static void pebble_runtime_init_args(int argc, char **argv)
-{
-    pebble_runtime_set_args(argc, argv);
-}
-#endif
-
 int64_t pebble_system_args_count(void)
 {
-    return (int64_t)g_argc;
+    int64_t user_count = (int64_t)g_argc - 1;
+    return user_count < 0 ? 0 : user_count;
 }
 
 PebbleString pebble_system_args_get(int64_t i)
 {
-    if (i < 0 || i >= (int64_t)g_argc || g_argv == NULL) {
+    int64_t user_count = (int64_t)g_argc - 1;
+    if (i < 0 || i >= user_count || g_argv == NULL) {
         return make_pebble_string("", 0);
     }
-    const char *s = g_argv[i];
+    const char *s = g_argv[i + 1];
     return make_pebble_string(s, (int64_t)strlen(s));
 }

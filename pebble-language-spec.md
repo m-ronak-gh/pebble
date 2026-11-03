@@ -17,9 +17,11 @@
 ## 2. Formal Grammar (EBNF)
 
 ```ebnf
-program        ::= { import_stmt | function_decl | struct_decl | enum_decl } ;
+program        ::= { import_stmt | extern_decl | function_decl | struct_decl | enum_decl } ;
 
-import_stmt    ::= "import" string_literal ";" ;
+import_stmt    ::= "import" ( string_literal | identifier ) [ ";" ] ;
+
+extern_decl    ::= "extern" "function" type identifier "(" [ param_list ] ")" ";" ;
 
 function_decl  ::= "function" type identifier "(" [ param_list ] ")" block ;
 param_list     ::= param { "," param } ;
@@ -88,7 +90,7 @@ primary        ::= number_literal | decimal_literal | string_literal | char_lite
 
 ---
 
-## 3. Keywords (22 total)
+## 3. Keywords (23 total)
 
 | Keyword | Purpose |
 |---|---|
@@ -106,11 +108,12 @@ primary        ::= number_literal | decimal_literal | string_literal | char_lite
 | `break` / `continue` | loop control |
 | `return` | exit a function, optionally with a value |
 | `function` | declare a function |
+| `extern` | declare an externally-provided function (C ABI) — used by the standard library to expose runtime implementations; not needed in ordinary Pebble programs |
 | `struct` | declare a plain-data user type |
 | `enum` | declare a named set of integer constants |
 | `const` | mark a variable immutable after declaration |
 | `true` / `false` | boolean literals |
-| `import` | bring in another `.peb` file's declarations |
+| `import` | bring in another `.pb` file's declarations or a stdlib module by name |
 | `null` | the empty/absent value (only valid for `string` and array types) |
 
 Everything else (`+ - * / % == != < > && || ! & | ^ ~ << >>`) is a symbolic operator, not a keyword — keeping the keyword count low while still giving Pebble a complete, honestly-labeled operator set as the brief asked for.
@@ -250,12 +253,21 @@ scores[0] = 100;
 
 ## 10. Module System
 
+Pebble has two import forms:
+
 ```
-import "mathutils.peb";
+import System;          -- stdlib module: bare identifier, semicolon optional
+import Math             -- stdlib module: no semicolon also accepted
+import "mathutils.pb";  -- user file: quoted path, semicolon optional
 ```
 
-- Imports are resolved by relative file path — no package registry, no manifest file, no version resolution. For a single-project teaching language, that machinery would be pure overhead.
-- Everything at a file's top level (functions, structs, enums) becomes visible to any file that imports it. There is no `public`/`private` modifier in v1 and no namespace-qualified access (`module.func()`) — imported names enter the importing file's global scope directly. Name collisions become a compile error the student has to resolve by hand, which is a reasonable and small teaching moment rather than a real limitation at this project's scale. A qualified-access syntax is a natural, low-risk v1.1 addition if collisions prove annoying in practice.
+**Stdlib modules** are imported by bare identifier (e.g. `import System;`, `import Math`). The identifier is resolved by the compiler against its built-in module list — no file path or extension is needed.
+
+**User files** are imported by quoted relative path (e.g. `import "mathutils.pb";`). Paths are resolved relative to the importing file's directory — no package registry, no manifest file, no version resolution. For a single-project teaching language, that machinery would be pure overhead.
+
+**Semicolons are optional** on both forms. `import System` and `import System;` are both valid.
+
+Everything at a file's top level (functions, structs, enums) becomes visible to any file that imports it. There is no `public`/`private` modifier in v1 and **no namespace-qualified access** (`System.func()` is invalid) — imported names enter the importing file's global scope directly. For example, importing `System` makes `argsCount` and `argsGet` callable without any prefix. Name collisions become a compile error the student has to resolve by hand, which is a reasonable and small teaching moment rather than a real limitation at this project's scale. A qualified-access syntax is a natural, low-risk v1.1 addition if collisions prove annoying in practice.
 
 ---
 
@@ -270,7 +282,7 @@ Deliberately tiny — every module here earns its place:
 | `math` | `abs`, `min`, `max`, `sqrt`, `pow`, `floor`, `ceil` |
 | `time` | `now() -> number`, `sleep(ms)` |
 | `random` | `seed(n)`, `randomInt(min, max)` |
-| `system` | `args() -> string[]` (command-line arguments) |
+| `system` | `argsCount() -> number` — returns the number of user-supplied command-line arguments (excluding the program name); `argsGet(i) -> string` — returns the `i`-th user argument (0-indexed); returns an empty string for negative or out-of-range `i` |
 
 Deliberately **excluded** from v1: a `collections` module (fixed arrays cover the pedagogical need; a dynamic list type is a clean, low-risk future addition once the core compiler is stable) and `networking` (sockets bring real platform-specific complexity for very little teaching payoff relative to the cost, at this project's scale).
 
