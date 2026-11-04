@@ -35,17 +35,33 @@ typedef struct {
 
 /* IO module support */
 void pebble_io_print_string(const char *data, int64_t length);
-PebbleString pebble_io_input(void);
-PebbleString pebble_io_readFile(PebbleString path);
-int64_t pebble_io_writeFile(PebbleString path, PebbleString contents);
+void pebble_io_input(PebbleString *result);
+void pebble_io_readFile(PebbleString *result, const PebbleString *path);
+int64_t pebble_io_writeFile(
+    const PebbleString *path,
+    const PebbleString *contents
+);
 
 /* String module support */
-PebbleString pebble_string_concat(PebbleString a, PebbleString b);
-PebbleString pebble_string_substring(PebbleString s, int64_t start, int64_t len);
-PebbleString pebble_string_charAt(PebbleString s, int64_t i);
-int64_t pebble_string_toNumber(PebbleString s);
-PebbleString pebble_string_toString_number(int64_t n);
-PebbleString pebble_string_toString_decimal(double n);
+void pebble_string_concat(
+    PebbleString *result,
+    const PebbleString *a,
+    const PebbleString *b
+);
+void pebble_string_substring(
+    PebbleString *result,
+    const PebbleString *s,
+    int64_t start,
+    int64_t len
+);
+void pebble_string_charAt(
+    PebbleString *result,
+    const PebbleString *s,
+    int64_t i
+);
+int64_t pebble_string_toNumber(const PebbleString *s);
+void pebble_string_toString_number(PebbleString *result, int64_t n);
+void pebble_string_toString_decimal(PebbleString *result, double n);
 
 /* Math module support */
 int64_t pebble_math_abs(int64_t n);
@@ -67,7 +83,7 @@ int64_t pebble_random_int(int64_t min_val, int64_t max_val);
 /* System module support */
 void pebble_runtime_init(int argc, char **argv);
 int64_t pebble_system_args_count(void);
-PebbleString pebble_system_args_get(int64_t i);
+void pebble_system_args_get(PebbleString *result, int64_t i);
 
 #ifdef __cplusplus
 }

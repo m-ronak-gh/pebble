@@ -30,6 +30,12 @@ typedef struct CodegenStructDef {
     struct CodegenStructDef *next;
 } CodegenStructDef;
 
+typedef struct CodegenExternFunction {
+    char *name;
+    ASTNode *declaration;
+    struct CodegenExternFunction *next;
+} CodegenExternFunction;
+
 typedef struct {
     LLVMContextRef context;
     LLVMModuleRef module;
@@ -42,6 +48,7 @@ typedef struct {
     CodegenVariable *variables;
     CodegenLoop *current_loop;
     CodegenStructDef *structs;
+    CodegenExternFunction *extern_functions;
     int has_error;
 } Codegen;
 

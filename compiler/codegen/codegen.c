@@ -181,6 +181,7 @@ Codegen *codegen_create(
     codegen->variables = NULL;
     codegen->current_loop = NULL;
     codegen->structs = NULL;
+    codegen->extern_functions = NULL;
     codegen->has_error = 0;
 
     if (codegen->semantic != NULL) {
@@ -217,6 +218,14 @@ void codegen_free(Codegen *codegen)
         free(s->name);
         free(s);
         s = next;
+    }
+
+    CodegenExternFunction *external = codegen->extern_functions;
+    while (external != NULL) {
+        CodegenExternFunction *next = external->next;
+        free(external->name);
+        free(external);
+        external = next;
     }
 
     LLVMDisposeBuilder(codegen->builder);
@@ -806,6 +815,67 @@ static LLVMValueRef codegen_string_equality(
     return phi;
 }
 
+static CodegenExternFunction *codegen_find_extern_function(
+    Codegen *codegen,
+    const char *name,
+    size_t name_length
+)
+{
+    for (CodegenExternFunction *external = codegen->extern_functions;
+         external != NULL;
+         external = external->next) {
+        if (strlen(external->name) == name_length &&
+            memcmp(external->name, name, name_length) == 0) {
+            return external;
+        }
+    }
+
+    return NULL;
+}
+
+static LLVMValueRef codegen_entry_alloca(
+    Codegen *codegen,
+    LLVMTypeRef type,
+    const char *name
+)
+{
+    if (codegen == NULL ||
+        codegen->current_function == NULL ||
+        type == NULL) {
+        return NULL;
+    }
+
+    LLVMBasicBlockRef entry =
+        LLVMGetEntryBasicBlock(codegen->current_function);
+
+    if (entry == NULL) {
+        return NULL;
+    }
+
+    LLVMBuilderRef builder =
+        LLVMCreateBuilderInContext(codegen->context);
+
+    if (builder == NULL) {
+        return NULL;
+    }
+
+    LLVMValueRef first_instruction =
+        LLVMGetFirstInstruction(entry);
+
+    if (first_instruction != NULL) {
+        LLVMPositionBuilderBefore(builder, first_instruction);
+    } else {
+        LLVMPositionBuilderAtEnd(builder, entry);
+    }
+
+    LLVMValueRef result =
+        LLVMBuildAlloca(builder, type, name);
+
+    LLVMDisposeBuilder(builder);
+
+    return result;
+}
+
 // Expressions
 LLVMValueRef codegen_expression(
     Codegen *codegen,
@@ -1032,25 +1102,180 @@ LLVMValueRef codegen_expression(
             }
 
             size_t count = expression->data.call.argument_count;
-            LLVMValueRef *arguments = count ? malloc(count * sizeof(*arguments)) : NULL;
-            if (count && arguments == NULL) {
-                CODEGEN_ERROR(codegen, "fatal: failed to allocate call arguments\n");
+
+            CodegenExternFunction *external =
+                codegen_find_extern_function(
+                    codegen,
+                    callee_node->data.identifier.start,
+                    callee_node->data.identifier.length
+                );
+            /*
+             * Ordinary Pebble functions retain their existing ABI.
+             * Only external functions use the pointer-based string ABI.
+             */
+            if (external == NULL) {
+                LLVMValueRef *arguments =
+                    count ? malloc(count * sizeof(*arguments)) : NULL;
+
+                if (count && arguments == NULL) {
+                    CODEGEN_ERROR(codegen, "fatal: failed to allocate call arguments\n");
+                    return NULL;
+                }
+
+                for (size_t i = 0; i < count; ++i) {
+                    arguments[i] =
+                        codegen_expression(codegen, expression->data.call.arguments[i]);
+
+                    if (arguments[i] == NULL) {
+                        free(arguments);
+                        return NULL;
+                    }
+                }
+
+                LLVMTypeRef function_type = LLVMGlobalGetValueType(callee);
+                LLVMTypeRef result_type = LLVMGetReturnType(function_type);
+
+                LLVMValueRef result = LLVMBuildCall2(
+                    codegen->builder,
+                    function_type,
+                    callee,
+                    arguments,
+                    (unsigned)count,
+                    result_type == LLVMVoidTypeInContext(codegen->context)
+                        ? ""
+                        : "calltmp"
+                );
+
+                free(arguments);
+
+                return result_type == LLVMVoidTypeInContext(codegen->context)
+                    ? NULL
+                    : result;
+            }
+
+            ASTNode *declaration = external->declaration;
+
+            if (declaration == NULL ||
+                declaration->kind != AST_EXTERN_FUNCTION ||
+                declaration->data.function_decl.parameter_count != count) {
+                CODEGEN_ERROR(codegen, "codegen: invalid external function declaration\n");
                 return NULL;
             }
-            for (size_t i = 0; i < count; ++i) {
-                arguments[i] = codegen_expression(codegen, expression->data.call.arguments[i]);
-                if (arguments[i] == NULL) { free(arguments); return NULL; }
-            }
-            LLVMTypeRef function_type = LLVMGlobalGetValueType(callee);
-            LLVMTypeRef result_type = LLVMGetReturnType(function_type);
-            LLVMValueRef result = LLVMBuildCall2(
-                codegen->builder, function_type, callee, arguments, (unsigned)count,
-                result_type == LLVMVoidTypeInContext(codegen->context) ? "" : "calltmp"
-            );
-            free(arguments);
-            return result_type == LLVMVoidTypeInContext(codegen->context) ? NULL : result;
-        }
 
+            ASTType return_ast_type =
+                declaration->data.function_decl.return_type;
+
+            int returns_string =
+                return_ast_type.kind == AST_TYPE_STRING &&
+                return_ast_type.dimension_count == 0;
+
+            size_t lowered_count = count + (returns_string ? 1 : 0);
+
+            LLVMValueRef *arguments =
+                lowered_count
+                    ? malloc(lowered_count * sizeof(*arguments))
+                    : NULL;
+
+            if (lowered_count && arguments == NULL) {
+                CODEGEN_ERROR(codegen, "fatal: failed to allocate external call arguments\n");
+                return NULL;
+            }
+
+            size_t offset = 0;
+            LLVMValueRef result_storage = NULL;
+
+            /*
+             * String return values use a caller-provided output slot.
+             */
+            if (returns_string) {
+                result_storage = codegen_entry_alloca(
+                    codegen,
+                    codegen->string_type,
+                    "extern.string.result"
+                );
+
+                if (result_storage == NULL) {
+                    free(arguments);
+                    CODEGEN_ERROR(codegen, "codegen: failed to allocate external string result\n");
+                    return NULL;
+                }
+
+                arguments[0] = result_storage;
+                offset = 1;
+            }
+
+            /*
+             * Evaluate arguments in source order.
+             * String arguments are copied into temporary storage and passed
+             * by pointer. All other argument types remain passed by value.
+             */
+            for (size_t i = 0; i < count; ++i) {
+                LLVMValueRef value =
+                    codegen_expression(codegen, expression->data.call.arguments[i]);
+
+                if (value == NULL) {
+                    free(arguments);
+                    return NULL;
+                }
+
+                ASTNode *parameter =
+                    declaration->data.function_decl.parameters[i];
+
+                ASTType parameter_type =
+                    parameter->data.var_decl.type;
+
+                if (parameter_type.kind == AST_TYPE_STRING &&
+                    parameter_type.dimension_count == 0) {
+
+                    LLVMValueRef storage = codegen_entry_alloca(
+                        codegen,
+                        codegen->string_type,
+                        "extern.string.arg"
+                    );
+
+                    if (storage == NULL) {
+                        free(arguments);
+                        CODEGEN_ERROR(codegen, "codegen: failed to allocate external string argument\n");
+                        return NULL;
+                    }
+
+                    LLVMBuildStore(codegen->builder, value, storage);
+                    arguments[i + offset] = storage;
+                } else {
+                    arguments[i + offset] = value;
+                }
+            }
+
+            LLVMTypeRef function_type = LLVMGlobalGetValueType(callee);
+
+            LLVMTypeRef result_type = LLVMGetReturnType(function_type);
+
+            LLVMValueRef call_result = LLVMBuildCall2(
+                codegen->builder,
+                function_type,
+                callee,
+                arguments,
+                (unsigned)lowered_count,
+                result_type == LLVMVoidTypeInContext(codegen->context)
+                    ? ""
+                    : "extern.call"
+            );
+
+            free(arguments);
+
+            if (returns_string) {
+                return LLVMBuildLoad2(
+                    codegen->builder,
+                    codegen->string_type,
+                    result_storage,
+                    "extern.string.return"
+                );
+            }
+
+            return result_type == LLVMVoidTypeInContext(codegen->context)
+                ? NULL
+                : call_result;
+        }
         case AST_IDENTIFIER: {
             CodegenVariable *variable =
                 codegen_find_variable(
@@ -2307,45 +2532,187 @@ static char *codegen_function_name(ASTNode *function)
     return name;
 }
 
+static void codegen_register_extern_function(
+    Codegen *codegen,
+    const char *name,
+    ASTNode *declaration
+)
+{
+    CodegenExternFunction *external =
+        malloc(sizeof(*external));
+
+    if (external == NULL) {
+        CODEGEN_ERROR(
+            codegen,
+            "fatal: failed to allocate external function metadata\n"
+        );
+        return;
+    }
+
+    size_t length = strlen(name);
+    external->name = malloc(length + 1);
+
+    if (external->name == NULL) {
+        free(external);
+        CODEGEN_ERROR(
+            codegen,
+            "fatal: failed to allocate external function name\n"
+        );
+        return;
+    }
+
+    memcpy(external->name, name, length + 1);
+    external->declaration = declaration;
+    external->next = codegen->extern_functions;
+    codegen->extern_functions = external;
+}
+
 void codegen_declare_function(Codegen *codegen, ASTNode *function)
 {
     if (codegen == NULL || function == NULL ||
-        (function->kind != AST_FUNCTION && function->kind != AST_EXTERN_FUNCTION)) return;
-    char *name = codegen_function_name(function);
-    if (name == NULL) {
-        CODEGEN_ERROR(codegen, "fatal: failed to allocate function name\n");
+        (function->kind != AST_FUNCTION &&
+         function->kind != AST_EXTERN_FUNCTION)) {
         return;
     }
+
+    char *name = codegen_function_name(function);
+
+    if (name == NULL) {
+        CODEGEN_ERROR(
+            codegen,
+            "fatal: failed to allocate function name\n"
+        );
+        return;
+    }
+
     if (LLVMGetNamedFunction(codegen->module, name) != NULL) {
         free(name);
         return;
     }
 
-    size_t count = function->data.function_decl.parameter_count;
-    LLVMTypeRef *parameter_types = count ? malloc(count * sizeof(*parameter_types)) : NULL;
-    if (count && parameter_types == NULL) {
+    size_t count =
+        function->data.function_decl.parameter_count;
+
+    ASTType return_ast_type =
+        function->data.function_decl.return_type;
+
+    int returns_string =
+        function->kind == AST_EXTERN_FUNCTION &&
+        return_ast_type.kind == AST_TYPE_STRING &&
+        return_ast_type.dimension_count == 0;
+
+    size_t lowered_count = count + (returns_string ? 1 : 0);
+
+    LLVMTypeRef *parameter_types =
+        lowered_count
+            ? malloc(lowered_count * sizeof(*parameter_types))
+            : NULL;
+
+    if (lowered_count && parameter_types == NULL) {
         free(name);
-        CODEGEN_ERROR(codegen, "fatal: failed to allocate function parameter types\n");
+        CODEGEN_ERROR(
+            codegen,
+            "fatal: failed to allocate function parameter types\n"
+        );
         return;
     }
+
+    LLVMTypeRef string_pointer_type =
+        LLVMPointerType(codegen->string_type, 0);
+
+    size_t offset = 0;
+
+    /*
+     * External string returns use an explicit output pointer.
+     *
+     * C ABI:
+     *     void function(PebbleString *result, ...)
+     */
+    if (returns_string) {
+        parameter_types[0] = string_pointer_type;
+        offset = 1;
+    }
+
     for (size_t i = 0; i < count; ++i) {
-        ASTNode *parameter = function->data.function_decl.parameters[i];
-        if (parameter == NULL || parameter->kind != AST_VAR_DECL) {
-            CODEGEN_ERROR(codegen, "codegen: malformed function parameter\n");
-            free(parameter_types); free(name); return;
+        ASTNode *parameter =
+            function->data.function_decl.parameters[i];
+
+        if (parameter == NULL ||
+            parameter->kind != AST_VAR_DECL) {
+            CODEGEN_ERROR(
+                codegen,
+                "codegen: malformed function parameter\n"
+            );
+            free(parameter_types);
+            free(name);
+            return;
         }
-        parameter_types[i] = llvm_type_from_ast(codegen, parameter->data.var_decl.type);
-        if (parameter_types[i] == NULL || parameter->data.var_decl.type.dimension_count != 0) {
-            if (parameter_types[i] != NULL)
-                CODEGEN_ERROR(codegen, "codegen: array parameters are not supported yet\n");
-            free(parameter_types); free(name); return;
+
+        ASTType parameter_ast_type =
+            parameter->data.var_decl.type;
+
+        LLVMTypeRef parameter_type =
+            llvm_type_from_ast(codegen, parameter_ast_type);
+
+        if (parameter_type == NULL ||
+            parameter_ast_type.dimension_count != 0) {
+            if (parameter_type != NULL) {
+                CODEGEN_ERROR(
+                    codegen,
+                    "codegen: array parameters are not supported yet\n"
+                );
+            }
+
+            free(parameter_types);
+            free(name);
+            return;
         }
+
+        /*
+         * Only external scalar strings use pointer parameters.
+         * Ordinary Pebble functions retain their existing ABI.
+         */
+        if (function->kind == AST_EXTERN_FUNCTION &&
+            parameter_ast_type.kind == AST_TYPE_STRING) {
+            parameter_type = string_pointer_type;
+        }
+
+        parameter_types[i + offset] = parameter_type;
     }
-    LLVMTypeRef return_type = codegen_return_type(codegen, function);
+
+    LLVMTypeRef return_type;
+
+    if (returns_string &&
+        function->kind == AST_EXTERN_FUNCTION) {
+        return_type = LLVMVoidTypeInContext(codegen->context);
+    } else {
+        return_type = codegen_return_type(codegen, function);
+    }
+
     if (return_type != NULL) {
-        LLVMTypeRef function_type = LLVMFunctionType(return_type, parameter_types, (unsigned)count, 0);
-        LLVMAddFunction(codegen->module, name, function_type);
+        LLVMTypeRef function_type =
+            LLVMFunctionType(
+                return_type,
+                parameter_types,
+                (unsigned)lowered_count,
+                0
+            );
+
+        LLVMAddFunction(
+            codegen->module,
+            name,
+            function_type
+        );
+
+        if (function->kind == AST_EXTERN_FUNCTION) {
+            codegen_register_extern_function(
+                codegen,
+                name,
+                function
+            );
+        }
     }
+
     free(parameter_types);
     free(name);
 }
