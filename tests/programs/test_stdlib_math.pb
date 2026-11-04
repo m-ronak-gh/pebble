@@ -18,5 +18,11 @@ function number main() {
     decimal ce ceil(3.1);
     print ce;
 
+    decimal nfl floor(-3.9);
+    print nfl;
+
+    decimal nce ceil(-3.1);
+    print nce;
+
     return 0;
 }

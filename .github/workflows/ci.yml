@@ -1,4 +1,3 @@
-
 name: Windows Debug CI
 
 on:
@@ -48,7 +47,12 @@ jobs:
             echo "=== First failing test trace ==="
             bash -x tests/driver_test.sh ./peb > driver-trace.log 2>&1 || true
             grep -n -B 35 -A 15 \
-              "FAIL: control flow and arithmetic" driver-trace.log || true
+              "FAIL: stdlib math" driver-trace.log || true
+
+            echo "=== Math-related trace ==="
+            grep -n -E -B 8 -A 12 \
+              'test_stdlib_math|pebble_math|Exit code: 127|Executable not found' \
+              driver-trace.log || true
 
             exit "$test_status"
           }

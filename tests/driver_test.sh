@@ -1270,8 +1270,7 @@ else
 fi
 
 # Test: stdlib math module
-EXPECTED=$(printf '42\n42\n10\n20\n5.000000\n256.000000\n3.000000\n4.000000')
-
+EXPECTED=$(printf '42\n42\n10\n20\n5.000000\n256.000000\n3.000000\n4.000000\n-4.000000\n-3.000000')
 if "$COMPILER" build "tests/programs/test_stdlib_math.pb" -o "$TMP_DIR/stdlib_math" >"$TMP_DIR/log" 2>&1; then
     ACTUAL=""
     EXIT_CODE=0
@@ -1314,6 +1313,8 @@ else
     fail "stdlib io: compilation failed"
     cat "$TMP_DIR/log"
 fi
+
+rm -f pebble_test_io_driver.txt
 
 # Test: stdlib time module
 EXPECTED=$(printf '1\n1')

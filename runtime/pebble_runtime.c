@@ -384,12 +384,18 @@ double pebble_math_pow(double base, double exp_val)
 
 double pebble_math_floor(double x)
 {
-    return __builtin_floor(x);
+    double integral;
+    double fractional = modf(x, &integral);
+
+    return (fractional < 0.0) ? integral - 1.0 : integral;
 }
 
 double pebble_math_ceil(double x)
 {
-    return __builtin_ceil(x);
+    double integral;
+    double fractional = modf(x, &integral);
+
+    return (fractional > 0.0) ? integral + 1.0 : integral;
 }
 
 /* =========================================================================
