@@ -79,38 +79,50 @@ void pebble_io_print_string(const char *data, int64_t length)
     fputc('\n', stdout);
 }
 
-PebbleString pebble_io_input(void)
+void pebble_io_input(PebbleString *result)
 {
+    if (result == NULL) return;
+
     char buf[4096];
+
     if (fgets(buf, (int)sizeof(buf), stdin) == NULL) {
-        return make_pebble_string("", 0);
+        *result = make_pebble_string("", 0);
+        return;
     }
+
     int64_t len = (int64_t)strlen(buf);
-    /* Strip trailing newline */
+
     if (len > 0 && buf[len - 1] == '\n') {
         buf[--len] = '\0';
     }
+
     if (len > 0 && buf[len - 1] == '\r') {
         buf[--len] = '\0';
     }
-    return make_pebble_string(buf, len);
+
+    *result = make_pebble_string(buf, len);
 }
 
 /*
  * pebble_io_readFile(path) -> string
- * Reads the entire file at the given path and returns its contents.
- * Returns an empty string on error.
  */
-PebbleString pebble_io_readFile(PebbleString path)
+void pebble_io_readFile(
+    PebbleString *result,
+    const PebbleString *path
+)
 {
-    if (path.ptr == NULL || path.len <= 0) {
-        return make_pebble_string("", 0);
+    if (result == NULL) return;
+
+    if (path == NULL || path->ptr == NULL || path->len <= 0) {
+        *result = make_pebble_string("", 0);
+        return;
     }
 
-    /* Ensure nul-termination (Pebble strings are nul-terminated by malloc). */
-    FILE *f = fopen(path.ptr, "rb");
+    FILE *f = fopen(path->ptr, "rb");
+
     if (f == NULL) {
-        return make_pebble_string("", 0);
+        *result = make_pebble_string("", 0);
+        return;
     }
 
     fseek(f, 0, SEEK_END);
@@ -119,140 +131,195 @@ PebbleString pebble_io_readFile(PebbleString path)
 
     if (size < 0) {
         fclose(f);
-        return make_pebble_string("", 0);
+        *result = make_pebble_string("", 0);
+        return;
     }
 
-    char *buf = (char *)malloc((size_t)(size + 1));
+    char *buf = malloc((size_t)size + 1);
+
     if (buf == NULL) {
         fclose(f);
-        return make_pebble_string("", 0);
+        *result = make_pebble_string("", 0);
+        return;
     }
 
     size_t read = fread(buf, 1, (size_t)size, f);
     fclose(f);
+
     buf[read] = '\0';
 
-    PebbleString result;
-    result.ptr = buf;
-    result.len = (int64_t)read;
-    return result;
+    result->ptr = buf;
+    result->len = (int64_t)read;
 }
 
 /*
  * pebble_io_writeFile(path, contents) -> number
- * Writes contents to the file at path. Returns 1 on success, 0 on error.
  */
-int64_t pebble_io_writeFile(PebbleString path, PebbleString contents)
+int64_t pebble_io_writeFile(
+    const PebbleString *path,
+    const PebbleString *contents
+)
 {
-    if (path.ptr == NULL || path.len <= 0) {
+    if (path == NULL || path->ptr == NULL || path->len <= 0) {
         return 0;
     }
 
-    FILE *f = fopen(path.ptr, "wb");
+    FILE *f = fopen(path->ptr, "wb");
+
     if (f == NULL) {
         return 0;
     }
 
     size_t written = 0;
-    if (contents.ptr != NULL && contents.len > 0) {
-        written = fwrite(contents.ptr, 1, (size_t)contents.len, f);
+
+    if (contents != NULL &&
+        contents->ptr != NULL &&
+        contents->len > 0) {
+        written = fwrite(
+            contents->ptr,
+            1,
+            (size_t)contents->len,
+            f
+        );
     }
+
     fclose(f);
 
-    return (written == (size_t)contents.len) ? 1 : 0;
+    return written == (contents != NULL && contents->len > 0
+        ? (size_t)contents->len
+        : 0) ? 1 : 0;
 }
 
 /* =========================================================================
  * string module
  * ========================================================================= */
 
-/*
- * pebble_string_concat(a, b) -> string
- */
-PebbleString pebble_string_concat(PebbleString a, PebbleString b)
+void pebble_string_concat(
+    PebbleString *result,
+    const PebbleString *a,
+    const PebbleString *b
+)
 {
-    int64_t new_len = a.len + b.len;
-    char *buf = (char *)malloc((size_t)(new_len + 1));
+    if (result == NULL) return;
+
+    int64_t a_len = a != NULL && a->ptr != NULL && a->len > 0
+        ? a->len : 0;
+    int64_t b_len = b != NULL && b->ptr != NULL && b->len > 0
+        ? b->len : 0;
+
+    if (a_len > INT64_MAX - b_len - 1) {
+        *result = make_pebble_string("", 0);
+        return;
+    }
+
+    int64_t new_len = a_len + b_len;
+
+    char *buf = malloc((size_t)new_len + 1);
+
     if (buf == NULL) {
-        return make_pebble_string("", 0);
+        *result = make_pebble_string("", 0);
+        return;
     }
-    if (a.ptr && a.len > 0) {
-        memcpy(buf, a.ptr, (size_t)a.len);
+
+    if (a_len > 0) {
+        memcpy(buf, a->ptr, (size_t)a_len);
     }
-    if (b.ptr && b.len > 0) {
-        memcpy(buf + a.len, b.ptr, (size_t)b.len);
+
+    if (b_len > 0) {
+        memcpy(buf + a_len, b->ptr, (size_t)b_len);
     }
+
     buf[new_len] = '\0';
 
-    PebbleString result;
-    result.ptr = buf;
-    result.len = new_len;
-    return result;
+    result->ptr = buf;
+    result->len = new_len;
 }
 
-/*
- * pebble_string_substring(s, start, len) -> string
- * Returns substring starting at 'start' with length 'len'.
- * Clamps to string bounds.
- */
-PebbleString pebble_string_substring(PebbleString s, int64_t start, int64_t len)
+void pebble_string_substring(
+    PebbleString *result,
+    const PebbleString *s,
+    int64_t start,
+    int64_t len
+)
 {
-    if (s.ptr == NULL || s.len <= 0 || start < 0 || start >= s.len) {
-        return make_pebble_string("", 0);
+    if (result == NULL) return;
+
+    if (s == NULL || s->ptr == NULL ||
+        s->len <= 0 || start < 0 || start >= s->len) {
+        *result = make_pebble_string("", 0);
+        return;
     }
+
     if (len < 0) len = 0;
-    if (start + len > s.len) {
-        len = s.len - start;
+
+    if (len > s->len - start) {
+        len = s->len - start;
     }
-    return make_pebble_string(s.ptr + start, len);
+
+    *result = make_pebble_string(s->ptr + start, len);
 }
 
-/*
- * pebble_string_charAt(s, i) -> string
- * Returns a 1-character string at index i.
- */
-PebbleString pebble_string_charAt(PebbleString s, int64_t i)
+void pebble_string_charAt(
+    PebbleString *result,
+    const PebbleString *s,
+    int64_t i
+)
 {
-    if (s.ptr == NULL || i < 0 || i >= s.len) {
-        return make_pebble_string("", 0);
+    if (result == NULL) return;
+
+    if (s == NULL || s->ptr == NULL ||
+        i < 0 || i >= s->len) {
+        *result = make_pebble_string("", 0);
+        return;
     }
-    char ch[1];
-    ch[0] = s.ptr[i];
-    return make_pebble_string(ch, 1);
+
+    *result = make_pebble_string(s->ptr + i, 1);
 }
 
-/*
- * pebble_string_toNumber(s) -> number
- * Parses the string as a decimal integer.
- */
-int64_t pebble_string_toNumber(PebbleString s)
+int64_t pebble_string_toNumber(const PebbleString *s)
 {
-    if (s.ptr == NULL || s.len <= 0) {
+    if (s == NULL || s->ptr == NULL || s->len <= 0) {
         return 0;
     }
-    return (int64_t)strtoll(s.ptr, NULL, 10);
+
+    return (int64_t)strtoll(s->ptr, NULL, 10);
 }
 
-/*
- * pebble_string_toString_number(n) -> string
- */
-PebbleString pebble_string_toString_number(int64_t n)
+void pebble_string_toString_number(
+    PebbleString *result,
+    int64_t n
+)
 {
+    if (result == NULL) return;
+
     char buf[32];
-    int written = snprintf(buf, sizeof(buf), "%lld", (long long)n);
+
+    int written = snprintf(
+        buf,
+        sizeof(buf),
+        "%lld",
+        (long long)n
+    );
+
     if (written < 0) written = 0;
-    return make_pebble_string(buf, (int64_t)written);
+
+    *result = make_pebble_string(buf, (int64_t)written);
 }
 
-/*
- * pebble_string_toString_decimal(n) -> string
- */
-PebbleString pebble_string_toString_decimal(double n)
+void pebble_string_toString_decimal(
+    PebbleString *result,
+    double n
+)
 {
+    if (result == NULL) return;
+
     char buf[64];
+
     int written = snprintf(buf, sizeof(buf), "%g", n);
+
     if (written < 0) written = 0;
-    return make_pebble_string(buf, (int64_t)written);
+
+    *result = make_pebble_string(buf, (int64_t)written);
 }
 
 /* =========================================================================
@@ -455,12 +522,18 @@ int64_t pebble_system_args_count(void)
     return user_count < 0 ? 0 : user_count;
 }
 
-PebbleString pebble_system_args_get(int64_t i)
+void pebble_system_args_get(PebbleString *result, int64_t i)
 {
+    if (result == NULL) return;
+
     int64_t user_count = (int64_t)g_argc - 1;
+
     if (i < 0 || i >= user_count || g_argv == NULL) {
-        return make_pebble_string("", 0);
+        *result = make_pebble_string("", 0);
+        return;
     }
+
     const char *s = g_argv[i + 1];
-    return make_pebble_string(s, (int64_t)strlen(s));
+
+    *result = make_pebble_string(s, (int64_t)strlen(s));
 }

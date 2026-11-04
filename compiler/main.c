@@ -796,6 +796,35 @@ static int link_object(const char *object_path, const char *output_path,
     return 1;
 }
 
+static int remove_output_executable(const char *output_path)
+{
+    if (remove(output_path) != 0 && errno != ENOENT) {
+        return 0;
+    }
+
+#if defined(_WIN32)
+    size_t length = strlen(output_path);
+    char *exe_path = malloc(length + 5);
+    if (exe_path == NULL) {
+        return 0;
+    }
+
+    memcpy(exe_path, output_path, length);
+    memcpy(exe_path + length, ".exe", 5);
+
+    int status = remove(exe_path);
+    int saved_errno = errno;
+    free(exe_path);
+
+    if (status != 0 && saved_errno != ENOENT) {
+        errno = saved_errno;
+        return 0;
+    }
+#endif
+
+    return 1;
+}
+
 static int compile_source(const char *source_path, const char *output_path,
                           int keep_ir, const char *compiler_path)
 {
@@ -823,7 +852,7 @@ static int compile_source(const char *source_path, const char *output_path,
         return 1;
     }
 
-    if (remove(output_path) != 0 && errno != ENOENT) {
+    if (!remove_output_executable(output_path)) {
         fprintf(stderr, "peb: cannot remove old output '%s': %s\n",
                 output_path, strerror(errno));
         free(runtime_path);
@@ -936,7 +965,7 @@ static int compile_source(const char *source_path, const char *output_path,
     if (codegen_has_error(codegen)) {
         fprintf(stderr,
                 "peb: code generation failed; executable not produced\n");
-        (void)remove(output_path);
+        (void)remove_output_executable(output_path);
         free(runtime_path);
         codegen_free(codegen);
         semantic_free(semantic);
@@ -996,7 +1025,7 @@ static int compile_source(const char *source_path, const char *output_path,
     }
 
     /* Never leave a stale executable that could be mistaken for this build. */
-    (void)remove(output_path);
+    (void)remove_output_executable(output_path);
     int ok = 1;
     if (!wrapper_ok) {
         fprintf(stderr, "peb: failed to write main() wrapper\n");
@@ -1013,7 +1042,7 @@ static int compile_source(const char *source_path, const char *output_path,
     if (!keep_ir) (void)remove(ir_path);
 
     if (ok) fprintf(stderr, "peb: built %s\n", output_path);
-    else (void)remove(output_path);
+    else (void)remove_output_executable(output_path);
 
     free(object_path);
     free(ir_path);
