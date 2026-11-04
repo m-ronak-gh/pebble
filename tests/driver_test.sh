@@ -19,9 +19,30 @@ fail() {
     FAIL=$((FAIL + 1))
 }
 
-# Run a program and normalize Windows CRLF output for comparisons.
+# Resolve executable paths on Unix and Windows.
+resolve_executable() {
+    local path="$1"
+
+    if [ -f "$path" ]; then
+        printf '%s\n' "$path"
+    elif [ -f "$path.exe" ]; then
+        printf '%s\n' "$path.exe"
+    else
+        return 1
+    fi
+}
+
+# Run a program and normalize Windows CRLF output.
 run_normalized() {
-    "$@" | sed 's/\r$//'
+    local executable
+
+    executable="$(resolve_executable "$1")" || {
+        echo "Executable not found: $1 or $1.exe" >&2
+        return 127
+    }
+
+    shift
+    "$executable" "$@" | sed 's/\r$//'
 }
 
 # Test 1: basic native compilation and execution
@@ -257,13 +278,7 @@ EOF
         pass "reject invalid rebuild"
     fi
 
-    echo "Checking stale executable removal..."
-    echo "Expected path: $TMP_DIR/rebuild"
-    echo "Executable exists:"
-    
-    ls -la "$TMP_DIR"/rebuild* 2>&1 || true
-    
-    if [ ! -e "$TMP_DIR/rebuild" ] && [ ! -e "$TMP_DIR/rebuild.exe" ]; then
+    if [ ! -e "$TMP_DIR/rebuild" ]; then
         pass "failed rebuild removes stale executable"
     else
         fail "failed rebuild leaves stale executable"
@@ -1234,7 +1249,7 @@ fi
 # Test: stdlib string module
 EXPECTED=$(printf 'Hello World\n11\nHello\ne\n12345\n987')
 
-if "$COMPILER" build tests/programs/test_stdlib_string.pb -o "$TMP_DIR/stdlib_string" >"$TMP_DIR/log" 2>&1; then
+if "$COMPILER" build "$TMP_DIR/stdlib_string.pb" -o "$TMP_DIR/stdlib_string" >"$TMP_DIR/log" 2>&1; then
     ACTUAL=""
     EXIT_CODE=0
     ACTUAL="$(run_normalized "$TMP_DIR/stdlib_string")" || EXIT_CODE=$?
@@ -1257,7 +1272,7 @@ fi
 # Test: stdlib math module
 EXPECTED=$(printf '42\n42\n10\n20\n5.000000\n256.000000\n3.000000\n4.000000')
 
-if "$COMPILER" build tests/programs/test_stdlib_math.pb -o "$TMP_DIR/stdlib_math" >"$TMP_DIR/log" 2>&1; then
+if "$COMPILER" build "$TMP_DIR/stdlib_math.pb" -o "$TMP_DIR/stdlib_math" >"$TMP_DIR/log" 2>&1; then
     ACTUAL=""
     EXIT_CODE=0
     ACTUAL="$(run_normalized "$TMP_DIR/stdlib_math")" || EXIT_CODE=$?
@@ -1280,7 +1295,7 @@ fi
 # Test: stdlib io module
 EXPECTED=$(printf '1\nPebble File Content')
 
-if "$COMPILER" build tests/programs/test_stdlib_io.pb -o "$TMP_DIR/stdlib_io" >"$TMP_DIR/log" 2>&1; then
+if "$COMPILER" build "$TMP_DIR/stdlib_io.pb" -o "$TMP_DIR/stdlib_io" >"$TMP_DIR/log" 2>&1; then
     ACTUAL=""
     EXIT_CODE=0
     ACTUAL="$(run_normalized "$TMP_DIR/stdlib_io")" || EXIT_CODE=$?
@@ -1323,7 +1338,7 @@ fi
 # Test: stdlib system module
 EXPECTED=$(printf '3\nalpha\nbeta with spaces\ngamma\n0\n0')
 
-if "$COMPILER" build tests/programs/test_stdlib_system.pb -o "$TMP_DIR/stdlib_system" >"$TMP_DIR/log" 2>&1; then
+if "$COMPILER" build "$TMP_DIR/stdlib_system.pb" -o "$TMP_DIR/stdlib_system" >"$TMP_DIR/log" 2>&1; then
     ACTUAL=""
     EXIT_CODE=0
     ACTUAL="$(run_normalized "$TMP_DIR/stdlib_system" alpha "beta with spaces" gamma)" || EXIT_CODE=$?
@@ -1346,7 +1361,7 @@ fi
 # Test: stdlib multi-module integration
 EXPECTED=$(printf 'Result: 123\n1')
 
-if "$COMPILER" build tests/programs/test_stdlib_all.pb -o "$TMP_DIR/stdlib_all" >"$TMP_DIR/log" 2>&1; then
+if "$COMPILER" build "$TMP_DIR/stdlib_all.pb" -o "$TMP_DIR/stdlib_all" >"$TMP_DIR/log" 2>&1; then
     ACTUAL=""
     EXIT_CODE=0
     ACTUAL="$(run_normalized "$TMP_DIR/stdlib_all")" || EXIT_CODE=$?
@@ -1379,12 +1394,20 @@ function number main() {
 EOF
 
 EXPECTED=$(printf '99\n12.000000')
-if "$COMPILER" build "$TMP_DIR/import_math_bare.pb" -o "$TMP_DIR/import_math_bare" >"$TMP_DIR/log" 2>&1 &&
-    [ "$("$TMP_DIR/import_math_bare")" = "$EXPECTED" ]; then
+ACTUAL=""
+EXIT_CODE=0
+
+ACTUAL="$(run_normalized "$TMP_DIR/import_math_bare")" || EXIT_CODE=$?
+
+if [ "$EXIT_CODE" -eq 0 ] && [ "$ACTUAL" = "$EXPECTED" ]; then
     pass "import Math (unquoted identifier without semicolon)"
 else
     fail "import Math (unquoted identifier without semicolon)"
-    cat "$TMP_DIR/log"
+    echo "Expected:"
+    printf '%s\n' "$EXPECTED"
+    echo "Actual:"
+    printf '%s\n' "$ACTUAL"
+    echo "Exit code: $EXIT_CODE"
 fi
 
 # Test: import String; (unquoted identifier with semicolon)
