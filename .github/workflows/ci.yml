@@ -1,22 +1,62 @@
-name: Windows Debug CI
+
+name: Cross-Platform CI
 
 on:
   push:
-    branches: [ windows-debug ]
+    branches: [ main, windows-debug ]
   pull_request:
-    branches: [ windows-debug ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   test:
-    name: Windows (x86_64, MSYS2 CLANG64)
-    runs-on: windows-latest
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux (Ubuntu 24.04, LLVM 18)
+            os: ubuntu-24.04
+            platform: linux
+
+          - name: macOS (macOS 14 ARM64, LLVM 18)
+            os: macos-14
+            platform: macos
+
+          - name: Windows (x86_64, MSYS2 CLANG64)
+            os: windows-latest
+            platform: windows
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup MSYS2 and LLVM (Windows)
+      # --- Linux toolchain setup ---
+      - name: Install LLVM 18 (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev clang-18
+          sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-18 100
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-18 100
+          sudo update-alternatives --install /usr/bin/opt opt /usr/bin/opt-18 100
+
+      # --- macOS toolchain setup ---
+      - name: Install LLVM 18 (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          brew install llvm@18
+          LLVM_PATH="$(brew --prefix llvm@18)"
+          echo "$LLVM_PATH/bin" >> "$GITHUB_PATH"
+          echo "CC=$LLVM_PATH/bin/clang" >> "$GITHUB_ENV"
+          echo "CLANG=$LLVM_PATH/bin/clang" >> "$GITHUB_ENV"
+          echo "OPT=$LLVM_PATH/bin/opt" >> "$GITHUB_ENV"
+
+      # --- Windows toolchain setup ---
+      - name: Setup MSYS2 and LLVM 18 (Windows)
+        if: matrix.platform == 'windows'
         uses: msys2/setup-msys2@v2
         with:
           msystem: CLANG64
@@ -27,7 +67,26 @@ jobs:
             make
             git
 
-      - name: Build compiler and run unit tests
+      # --- Build and test on Linux & macOS ---
+      - name: Build compiler and run full test suite (Linux & macOS)
+        if: matrix.platform != 'windows'
+        run: |
+          echo "=== Compiler and toolchain versions ==="
+          ${CC:-gcc} --version
+          llvm-config --version
+
+          echo "=== Building compiler and unit tests ==="
+          make test
+
+          echo "=== Running bounds and primitive array checks ==="
+          make primitive-array-tests multidim-test bounds-test semantic-bounds-test
+
+          echo "=== Creating release package ==="
+          make package
+
+      # --- Build and test on Windows ---
+      - name: Build compiler and run full test suite (Windows)
+        if: matrix.platform == 'windows'
         shell: msys2 {0}
         run: |
           echo "=== Compiler and toolchain versions ==="
@@ -35,29 +94,10 @@ jobs:
           llvm-config --version
 
           echo "=== Building compiler and unit tests ==="
-          make CC=clang test || {
-            test_status=$?
+          make CC=clang test
 
-            echo "=== Driver test comparison helpers ==="
-            sed -n '1,120p' tests/driver_test.sh || true
-
-            echo "=== Output comparison locations ==="
-            grep -n -E 'EXPECTED|ACTUAL|assert|diff' tests/driver_test.sh || true
-
-            echo "=== First failing test trace ==="
-            bash -x tests/driver_test.sh ./peb > driver-trace.log 2>&1 || true
-            grep -n -B 35 -A 15 \
-              "FAIL: stdlib math" driver-trace.log || true
-
-            echo "=== Math-related trace ==="
-            grep -n -E -B 8 -A 12 \
-              'test_stdlib_math|pebble_math|Exit code: 127|Executable not found' \
-              driver-trace.log || true
-
-            exit "$test_status"
-          }
-
-      - name: Run bounds and primitive array checks
-        shell: msys2 {0}
-        run: |
+          echo "=== Running bounds and primitive array checks ==="
           make CC=clang primitive-array-tests multidim-test bounds-test semantic-bounds-test
+
+          echo "=== Creating release package ==="
+          make CC=clang package
