@@ -310,7 +310,7 @@ Every Pebble error follows the same shape: **what happened → where → why it'
 
 ```
 error: missing semicolon
-  --> hello.peb:3:15
+  --> hello.pb:3:15
    |
  3 | print "Hello"
    |               ^ expected ';' here
@@ -331,7 +331,7 @@ Rules for every diagnostic:
 
 ## 14. Style Guide
 
-- File extension: `.peb`
+- File extension: `.pb`
 - Naming: `camelCase` for variables and functions, `PascalCase` for `struct`/`enum` names, `SCREAMING_SNAKE_CASE` for `const`
 - Indentation: 4 spaces, opening brace on the same line (`if (x) {`)
 - One statement per line; every statement ends in `;`
@@ -358,21 +358,21 @@ Build system: a **hand-written Makefile**, not CMake — consistent with the lan
 ## 16. Repository Structure
 
 ```
-pebble/
+pebblebit/
 ├── compiler/
 │   ├── lexer/
 │   ├── parser/
 │   ├── ast/
 │   ├── semantic/
 │   └── codegen/          -- LLVM IR generation via llvm-c
-├── runtime/               -- small C runtime linked into every Pebble binary
+├── runtime/               -- small C runtime linked into every Pebblebit binary
 │                             (alloc/free wrappers, string helpers, bounds-check panic handler)
 ├── stdlib/                -- C implementations of io/string/math/time/random/system,
 │                             exposed to Pebble programs via extern declarations
 ├── examples/               -- calculator, tic-tac-toe, sorting, linked list, binary tree, CSV parser
 ├── tests/
 │   ├── unit/                -- lexer/parser/semantic/codegen unit tests
-│   └── programs/            -- .peb test programs with expected output, run end-to-end
+│   └── programs/            -- .pb test programs with expected output, run end-to-end
 ├── docs/                     -- docs site source, deployed via GitHub Pages
 ├── benchmarks/
 ├── .github/workflows/       -- CI + Pages deploy
@@ -384,31 +384,6 @@ pebble/
 ```
 
 ---
-
-## 17. Roadmap — 10 Weeks, 4-Person Team
-
-**Team split**
-
-| Role | Owns |
-|---|---|
-| Programmer A (strong) | Lexer, parser, AST |
-| Programmer B (strong) | Semantic analysis, LLVM IR codegen |
-| Programmer C (intermediate) | Makefile/LLVM linking, C runtime & stdlib, CI, benchmarks |
-| Programmer D (beginner) | Tests, example programs, docs site, diagnostic message wording, issue triage |
-
-**Weekly plan**
-
-- **Week 1:** Freeze this spec against real team feedback. Toolchain smoke test — LLVM + Makefile producing a real `.exe` from hand-written IR, working on every machine and in CI. Do not proceed until this works.
-- **Week 2:** Lexer complete, unit-tested.
-- **Week 3:** Parser complete (recursive descent + Pratt), produces correct AST for the full grammar.
-- **Week 4:** Semantic analysis — types, scopes, the "must initialize" rule, `const` enforcement.
-- **Week 5:** Codegen for expressions, variables, `print`.
-- **Week 6:** Codegen for control flow (`if`/`while`/`repeat`/`for`) and functions/recursion.
-- **Week 7:** Structs, enums, arrays codegen (including bounds-check panics) + C runtime (`alloc`/`free`/string helpers) linked in.
-- **Week 8:** Standard library modules + `import` resolution.
-- **Week 9:** Diagnostics pass, test suite hardening, all example programs (calculator, tic-tac-toe, sorting, linked list, binary tree) compiling and running correctly.
-- **Week 10:** Docs site live on GitHub Pages, polish pass, `v1.0.0` tag, GitHub Release with prebuilt binaries.
-
 **Risks & mitigations**
 
 - *LLVM/toolchain mismatch across machines or CI* — mitigated by the week-1 smoke test and a pinned LLVM version documented in the README.

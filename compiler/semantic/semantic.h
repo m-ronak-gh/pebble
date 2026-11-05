@@ -1,5 +1,5 @@
-#ifndef PEBBLE_SEMANTIC_H
-#define PEBBLE_SEMANTIC_H
+#ifndef PEBBLEBIT_SEMANTIC_H
+#define PEBBLEBIT_SEMANTIC_H
 
 #include <stddef.h>
 #include "../ast/ast.h"
@@ -73,4 +73,4 @@ int semantic_struct_field_index(
     ASTType *out_field_type
 );
 
-#endif // PEBBLE_SEMANTIC_H */
+#endif // PEBBLEBIT_SEMANTIC_H */

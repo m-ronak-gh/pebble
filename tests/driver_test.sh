@@ -695,15 +695,15 @@ else
     cat "$TMP_DIR/log"
 fi
 
-# Test: runtime discovery using PEBBLE_RUNTIME_DIR
+# Test: runtime discovery using PEBBLEBIT_RUNTIME_DIR
 mkdir -p "$TMP_DIR/custom_runtime"
-cp runtime/pebble_runtime.c runtime/pebble_runtime.h "$TMP_DIR/custom_runtime/"
-if (PEBBLE_RUNTIME_DIR="$TMP_DIR/custom_runtime" "$COMPILER" build "$TMP_DIR/basic.pb" -o "$TMP_DIR/custom_rt_build") \
+cp runtime/pebblebit_runtime.c runtime/pebblebit_runtime.h "$TMP_DIR/custom_runtime/"
+if (PEBBLEBIT_RUNTIME_DIR="$TMP_DIR/custom_runtime" "$COMPILER" build "$TMP_DIR/basic.pb" -o "$TMP_DIR/custom_rt_build") \
     >"$TMP_DIR/log" 2>&1 &&
     [ "$(run_normalized "$TMP_DIR/custom_rt_build")" = "42" ]; then
-    pass "runtime discovery with PEBBLE_RUNTIME_DIR"
+    pass "runtime discovery with PEBBLEBIT_RUNTIME_DIR"
 else
-    fail "runtime discovery with PEBBLE_RUNTIME_DIR"
+    fail "runtime discovery with PEBBLEBIT_RUNTIME_DIR"
     cat "$TMP_DIR/log"
 fi
 
@@ -993,8 +993,8 @@ function number main() {
     State st ON;
     print typeof(st);
 
-    string s1 "pebble";
-    string s2 "pebble";
+    string s1 "pebblebit";
+    string s2 "pebblebit";
     string s3 "rock";
 
     if (s1 == s2) {
@@ -1292,7 +1292,7 @@ else
 fi
 
 # Test: stdlib io module
-EXPECTED=$(printf '1\nPebble File Content')
+EXPECTED=$(printf '1\nPebblebit File Content')
 
 if "$COMPILER" build "tests/programs/test_stdlib_io.pb" -o "$TMP_DIR/stdlib_io" >"$TMP_DIR/log" 2>&1; then
     ACTUAL=""
@@ -1314,7 +1314,7 @@ else
     cat "$TMP_DIR/log"
 fi
 
-rm -f pebble_test_io_driver.txt
+rm -f pebblebit_test_io_driver.txt
 
 # Test: stdlib time module
 EXPECTED=$(printf '1\n1')
@@ -1356,6 +1356,19 @@ if "$COMPILER" build "tests/programs/test_stdlib_system.pb" -o "$TMP_DIR/stdlib_
     fi
 else
     fail "stdlib system: compilation failed"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: reject .txt source extension
+cp "$TMP_DIR/basic.pb" "$TMP_DIR/invalid.txt"
+
+if "$COMPILER" build "$TMP_DIR/invalid.txt" \
+    >"$TMP_DIR/log" 2>&1; then
+    fail "reject .txt source extension"
+elif grep -q "unsupported source file extension '.txt'" "$TMP_DIR/log"; then
+    pass "reject .txt source extension"
+else
+    fail "clear diagnostic for .txt source extension"
     cat "$TMP_DIR/log"
 fi
 
@@ -1422,14 +1435,14 @@ cat > "$TMP_DIR/import_string_bare.pb" << 'EOF'
 import String;
 
 function number main() {
-    string s concat("Pebble ", "Language");
+    string s concat("Pebblebit ", "Language");
     print s;
     print charAt(s, 0);
     return 0;
 }
 EOF
 
-EXPECTED=$(printf 'Pebble Language\nP')
+EXPECTED=$(printf 'Pebblebit Language\nP')
 
 if "$COMPILER" build "$TMP_DIR/import_string_bare.pb" -o "$TMP_DIR/import_string_bare" >"$TMP_DIR/log" 2>&1; then
     ACTUAL=""

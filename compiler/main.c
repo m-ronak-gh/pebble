@@ -43,9 +43,9 @@ static void usage(const char *program, FILE *stream)
 {
     fprintf(stream,
         "Usage:\n"
-        "  %s <source.pb|source.peb> [-o output] [--keep-ir]\n"
-        "  %s build <source.pb|source.peb> [-o output] [--keep-ir]\n"
-        "  %s run <source.pb|source.peb> [-o output] [--keep-ir]\n",
+        "  %s <source.pb> [-o output] [--keep-ir]\n"
+        "  %s build <source.pb> [-o output] [--keep-ir]\n"
+        "  %s run <source.pb> [-o output] [--keep-ir]\n",
         program, program, program);
 }
 
@@ -53,19 +53,19 @@ static char *read_file(const char *path)
 {
     FILE *file = fopen(path, "rb");
     if (file == NULL) {
-        fprintf(stderr, "peb: cannot open '%s': %s\n", path, strerror(errno));
+        fprintf(stderr, "pbit: cannot open '%s': %s\n", path, strerror(errno));
         return NULL;
     }
 
     if (fseek(file, 0, SEEK_END) != 0) {
-        fprintf(stderr, "peb: cannot seek '%s'\n", path);
+        fprintf(stderr, "pbit: cannot seek '%s'\n", path);
         fclose(file);
         return NULL;
     }
 
     long end = ftell(file);
     if (end < 0 || fseek(file, 0, SEEK_SET) != 0) {
-        fprintf(stderr, "peb: cannot determine size of '%s'\n", path);
+        fprintf(stderr, "pbit: cannot determine size of '%s'\n", path);
         fclose(file);
         return NULL;
     }
@@ -73,14 +73,14 @@ static char *read_file(const char *path)
     size_t size = (size_t)end;
     char *buffer = malloc(size + 1);
     if (buffer == NULL) {
-        fprintf(stderr, "peb: out of memory reading '%s'\n", path);
+        fprintf(stderr, "pbit: out of memory reading '%s'\n", path);
         fclose(file);
         return NULL;
     }
 
     size_t got = fread(buffer, 1, size, file);
     if (got != size || ferror(file)) {
-        fprintf(stderr, "peb: failed reading '%s'\n", path);
+        fprintf(stderr, "pbit: failed reading '%s'\n", path);
         free(buffer);
         fclose(file);
         return NULL;
@@ -185,7 +185,7 @@ static char *try_search_dir_for_name(const char *dir, const char *name, size_t n
         free(p);
     }
 
-    /* 2. If no extension, try with .pb and .peb (both as-is and lowercase) */
+    /* 2. If no extension, try with .pb (lowercase) */
     int has_dot = 0;
     for (size_t i = 0; i < name_len; ++i) {
         if (name[i] == '.') { has_dot = 1; break; }
@@ -213,33 +213,17 @@ static char *try_search_dir_for_name(const char *dir, const char *name, size_t n
                 free(p);
             }
         }
-
-        snprintf(buf, sizeof(buf), "%.*s.peb", (int)name_len, name);
-        p = join_paths(dir, buf, strlen(buf));
-        if (p != NULL) {
-            if (file_exists(p)) return p;
-            free(p);
-        }
-
-        if (name_len < sizeof(lower) - 6) {
-            for (size_t i = 0; i < name_len; ++i) {
-                lower[i] = (char)tolower((unsigned char)name[i]);
-            }
-            lower[name_len] = '\0';
-            strcat(lower, ".peb");
-            p = join_paths(dir, lower, strlen(lower));
-            if (p != NULL) {
-                if (file_exists(p)) return p;
-                free(p);
-            }
-        }
     }
 
     return NULL;
 }
 
-static char *find_import_path(const char *dir, const char *rel_path, size_t rel_len)
-{
+static char *find_import_path(
+    const char *dir,
+    const char *stdlib_dir,
+    const char *rel_path,
+    size_t rel_len
+){
     int has_dot = 0;
     for (size_t i = 0; i < rel_len; ++i) {
         if (rel_path[i] == '.') { has_dot = 1; break; }
@@ -256,16 +240,17 @@ static char *find_import_path(const char *dir, const char *rel_path, size_t rel_
     }
 
     const char *search_dirs[] = {
-        getenv("PEBBLE_STD_DIR"),
-        getenv("PEBBLE_STDLIB_DIR"),
-        "lib/pebble/std",
+        getenv("PEBBLEBIT_STD_DIR"),
+        getenv("PEBBLEBIT_STDLIB_DIR"),
+        stdlib_dir,
+        "lib/pebblebit/std",
         "stdlib",
-        "../lib/pebble/std",
+        "../lib/pebblebit/std",
         "../stdlib",
-        "../../lib/pebble/std",
+        "../../lib/pebblebit/std",
         "../../stdlib",
-        "/usr/local/lib/pebble/std",
-        "/usr/lib/pebble/std",
+        "/usr/local/lib/pebblebit/std",
+        "/usr/lib/pebblebit/std",
         NULL
     };
 
@@ -322,8 +307,12 @@ static char *resolve_canonical_path(const char *path)
 #endif
 }
 
-static int resolve_imports(ASTNode *program, const char *current_file_path, SourceManager *sm)
-{
+static int resolve_imports(
+    ASTNode *program,
+    const char *current_file_path,
+    SourceManager *sm,
+    const char *stdlib_dir
+){
     char *dir = get_directory(current_file_path);
     if (dir == NULL) return 0;
 
@@ -342,7 +331,18 @@ static int resolve_imports(ASTNode *program, const char *current_file_path, Sour
             rel_len -= 2;
         }
 
-        char *joined = find_import_path(dir, rel_path, rel_len);
+        char *joined = find_import_path(
+            dir,
+            stdlib_dir,
+            rel_path,
+            rel_len
+        );
+
+        if (joined == NULL) {
+            free(dir);
+            return 0;
+        }
+
         if (joined == NULL) {
             free(dir);
             return 0;
@@ -360,7 +360,7 @@ static int resolve_imports(ASTNode *program, const char *current_file_path, Sour
 
         char *content = read_file(joined);
         if (content == NULL) {
-            fprintf(stderr, "peb: failed to import '%.*s'\n", (int)rel_len, rel_path);
+            fprintf(stderr, "pbit: failed to import '%.*s'\n", (int)rel_len, rel_path);
             free(joined);
             free(canonical);
             free(dir);
@@ -386,12 +386,12 @@ static int resolve_imports(ASTNode *program, const char *current_file_path, Sour
         parser_init(&imported_parser, content);
         ASTNode *imported_prog = parser_parse_program(&imported_parser);
         if (imported_prog == NULL) {
-            fprintf(stderr, "peb: parsing imported file failed\n");
+            fprintf(stderr, "pbit: parsing imported file failed\n");
             free(dir);
             return 0;
         }
 
-        if (!resolve_imports(imported_prog, stored_path, sm)) {
+        if (!resolve_imports(imported_prog, stored_path, sm, stdlib_dir)) {
             ast_free(imported_prog);
             free(dir);
             return 0;
@@ -514,7 +514,7 @@ static int platform_run_command(const char *const *argv)
     ZeroMemory(&pi, sizeof(pi));
 
     if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
-        fprintf(stderr, "peb: failed to execute '%s' (error %lu)\n", argv[0], GetLastError());
+        fprintf(stderr, "pbit: failed to execute '%s' (error %lu)\n", argv[0], GetLastError());
         free(cmdline);
         return -1;
     }
@@ -542,19 +542,19 @@ static int platform_run_command(const char *const *argv)
 {
     pid_t child = fork();
     if (child < 0) {
-        fprintf(stderr, "peb: cannot start executable: %s\n", strerror(errno));
+        fprintf(stderr, "pbit: cannot start executable: %s\n", strerror(errno));
         return 1;
     }
     if (child == 0) {
         execvp(argv[0], (char *const *)argv);
-        fprintf(stderr, "peb: cannot execute '%s': %s\n", argv[0], strerror(errno));
+        fprintf(stderr, "pbit: cannot execute '%s': %s\n", argv[0], strerror(errno));
         _exit(127);
     }
 
     int status = 0;
     while (waitpid(child, &status, 0) < 0) {
         if (errno == EINTR) continue;
-        fprintf(stderr, "peb: waitpid failed: %s\n", strerror(errno));
+        fprintf(stderr, "pbit: waitpid failed: %s\n", strerror(errno));
         return 1;
     }
     if (WIFEXITED(status)) return WEXITSTATUS(status);
@@ -603,21 +603,68 @@ static int file_exists(const char *path)
     return 0;
 }
 
+static char *find_stdlib_directory(const char *compiler_path)
+{
+    char *compiler_dir = get_directory(compiler_path);
+    if (compiler_dir == NULL) {
+        return NULL;
+    }
+
+    const char *relative_dirs[] = {
+        "stdlib",
+        "lib/pebblebit/std",
+        "../lib/pebblebit/std",
+        "../share/pebblebit/std",
+        NULL
+    };
+
+    char candidate[PATH_MAX];
+    char probe[PATH_MAX];
+
+    for (size_t i = 0; relative_dirs[i] != NULL; ++i) {
+        int written = snprintf(
+            candidate, sizeof(candidate),
+            "%s/%s", compiler_dir, relative_dirs[i]
+        );
+
+        if (written < 0 || (size_t)written >= sizeof(candidate)) {
+            continue;
+        }
+
+        written = snprintf(
+            probe, sizeof(probe), "%s/math.pb", candidate
+        );
+
+        if (written < 0 || (size_t)written >= sizeof(probe)) {
+            continue;
+        }
+
+        if (file_exists(probe)) {
+            char *result = strdup(candidate);
+            free(compiler_dir);
+            return result;
+        }
+    }
+
+    free(compiler_dir);
+    return NULL;
+}
+
 static char *find_runtime_path(const char *compiler_path)
 {
-    /* 1. Explicit environment variable PEBBLE_RUNTIME_PATH */
-    const char *env_path = getenv("PEBBLE_RUNTIME_PATH");
+    /* 1. Explicit environment variable PEBBLEBIT_RUNTIME_PATH */
+    const char *env_path = getenv("PEBBLEBIT_RUNTIME_PATH");
     if (env_path != NULL && file_exists(env_path)) {
         return strdup(env_path);
     }
 
-    /* 2. Directory override PEBBLE_RUNTIME_DIR */
-    const char *env_dir = getenv("PEBBLE_RUNTIME_DIR");
+    /* 2. Directory override PEBBLEBIT_RUNTIME_DIR */
+    const char *env_dir = getenv("PEBBLEBIT_RUNTIME_DIR");
     if (env_dir != NULL && env_dir[0] != '\0') {
         char buf[PATH_MAX];
-        snprintf(buf, sizeof(buf), "%s/pebble_runtime.c", env_dir);
+        snprintf(buf, sizeof(buf), "%s/pebblebit_runtime.c", env_dir);
         if (file_exists(buf)) return strdup(buf);
-        snprintf(buf, sizeof(buf), "%s/runtime/pebble_runtime.c", env_dir);
+        snprintf(buf, sizeof(buf), "%s/runtime/pebblebit_runtime.c", env_dir);
         if (file_exists(buf)) return strdup(buf);
     }
 
@@ -627,36 +674,36 @@ static char *find_runtime_path(const char *compiler_path)
         if (compiler_dir != NULL) {
             char buf[PATH_MAX];
 
-            /* In repository: <dir>/runtime/pebble_runtime.c */
-            snprintf(buf, sizeof(buf), "%s/runtime/pebble_runtime.c", compiler_dir);
+            /* In repository: <dir>/runtime/pebblebit_runtime.c */
+            snprintf(buf, sizeof(buf), "%s/runtime/pebblebit_runtime.c", compiler_dir);
             if (file_exists(buf)) {
                 free(compiler_dir);
                 return strdup(buf);
             }
 
-            /* Bundled co-located: <dir>/pebble_runtime.c */
-            snprintf(buf, sizeof(buf), "%s/pebble_runtime.c", compiler_dir);
+            /* Bundled co-located: <dir>/pebblebit_runtime.c */
+            snprintf(buf, sizeof(buf), "%s/pebblebit_runtime.c", compiler_dir);
             if (file_exists(buf)) {
                 free(compiler_dir);
                 return strdup(buf);
             }
 
-            /* Package directory layout: <dir>/../runtime/pebble_runtime.c */
-            snprintf(buf, sizeof(buf), "%s/../runtime/pebble_runtime.c", compiler_dir);
+            /* Package directory layout: <dir>/../runtime/pebblebit_runtime.c */
+            snprintf(buf, sizeof(buf), "%s/../runtime/pebblebit_runtime.c", compiler_dir);
             if (file_exists(buf)) {
                 free(compiler_dir);
                 return strdup(buf);
             }
 
-            /* Standard unix install: <dir>/../lib/pebble/pebble_runtime.c */
-            snprintf(buf, sizeof(buf), "%s/../lib/pebble/pebble_runtime.c", compiler_dir);
+            /* Standard unix install: <dir>/../lib/pebblebit/pebblebit_runtime.c */
+            snprintf(buf, sizeof(buf), "%s/../lib/pebblebit/pebblebit_runtime.c", compiler_dir);
             if (file_exists(buf)) {
                 free(compiler_dir);
                 return strdup(buf);
             }
 
-            /* Standard unix install: <dir>/../share/pebble/pebble_runtime.c */
-            snprintf(buf, sizeof(buf), "%s/../share/pebble/pebble_runtime.c", compiler_dir);
+            /* Standard unix install: <dir>/../share/pebblebit/pebblebit_runtime.c */
+            snprintf(buf, sizeof(buf), "%s/../share/pebblebit/pebblebit_runtime.c", compiler_dir);
             if (file_exists(buf)) {
                 free(compiler_dir);
                 return strdup(buf);
@@ -667,11 +714,11 @@ static char *find_runtime_path(const char *compiler_path)
     }
 
     /* 4. Current working directory fallback */
-    if (file_exists("runtime/pebble_runtime.c")) {
-        return strdup("runtime/pebble_runtime.c");
+    if (file_exists("runtime/pebblebit_runtime.c")) {
+        return strdup("runtime/pebblebit_runtime.c");
     }
-    if (file_exists("pebble_runtime.c")) {
-        return strdup("pebble_runtime.c");
+    if (file_exists("pebblebit_runtime.c")) {
+        return strdup("pebblebit_runtime.c");
     }
 
     return NULL;
@@ -679,7 +726,7 @@ static char *find_runtime_path(const char *compiler_path)
 
 static const char *get_linker_command(void)
 {
-    const char *env_cc = getenv("PEBBLE_CC");
+    const char *env_cc = getenv("PEBBLEBIT_CC");
     if (env_cc != NULL && env_cc[0] != '\0') return env_cc;
     env_cc = getenv("CC");
     if (env_cc != NULL && env_cc[0] != '\0') return env_cc;
@@ -697,20 +744,20 @@ static int emit_object(LLVMModuleRef module, const char *object_path)
 {
     if (LLVMInitializeNativeTarget() != 0 ||
         LLVMInitializeNativeAsmPrinter() != 0) {
-        fprintf(stderr, "peb: failed to initialize LLVM native target\n");
+        fprintf(stderr, "pbit: failed to initialize LLVM native target\n");
         return 0;
     }
 
     char *triple = LLVMGetDefaultTargetTriple();
     if (triple == NULL) {
-        fprintf(stderr, "peb: LLVM could not determine the target triple\n");
+        fprintf(stderr, "pbit: LLVM could not determine the target triple\n");
         return 0;
     }
 
     LLVMTargetRef target = NULL;
     char *error = NULL;
     if (LLVMGetTargetFromTriple(triple, &target, &error) != 0) {
-        fprintf(stderr, "peb: cannot select target: %s\n",
+        fprintf(stderr, "pbit: cannot select target: %s\n",
                 error != NULL ? error : "unknown LLVM error");
         if (error != NULL) LLVMDisposeMessage(error);
         LLVMDisposeMessage(triple);
@@ -721,7 +768,7 @@ static int emit_object(LLVMModuleRef module, const char *object_path)
         target, triple, "generic", "", LLVMCodeGenLevelDefault,
         LLVMRelocDefault, LLVMCodeModelDefault);
     if (machine == NULL) {
-        fprintf(stderr, "peb: failed to create LLVM target machine\n");
+        fprintf(stderr, "pbit: failed to create LLVM target machine\n");
         LLVMDisposeMessage(triple);
         return 0;
     }
@@ -733,7 +780,7 @@ static int emit_object(LLVMModuleRef module, const char *object_path)
 
     int ok = 1;
     if (LLVMVerifyModule(module, LLVMReturnStatusAction, &error) != 0) {
-        fprintf(stderr, "peb: generated invalid LLVM IR:\n%s\n",
+        fprintf(stderr, "pbit: generated invalid LLVM IR:\n%s\n",
                 error != NULL ? error : "unknown verifier error");
         if (error != NULL) LLVMDisposeMessage(error);
         error = NULL;
@@ -742,7 +789,7 @@ static int emit_object(LLVMModuleRef module, const char *object_path)
 
     if (ok && LLVMTargetMachineEmitToFile(
             machine, module, (char *)object_path, LLVMObjectFile, &error) != 0) {
-        fprintf(stderr, "peb: object generation failed: %s\n",
+        fprintf(stderr, "pbit: object generation failed: %s\n",
                 error != NULL ? error : "unknown LLVM error");
         if (error != NULL) LLVMDisposeMessage(error);
         ok = 0;
@@ -790,7 +837,7 @@ static int link_object(const char *object_path, const char *output_path,
     int status = platform_run_command(args);
     free(runtime_dir);
     if (status != 0) {
-        fprintf(stderr, "peb: system linker failed with status %d\n", status);
+        fprintf(stderr, "pbit: system linker failed with status %d\n", status);
         return 0;
     }
     return 1;
@@ -837,8 +884,8 @@ static int compile_source(const char *source_path, const char *output_path,
 
     char *runtime_path = find_runtime_path(compiler_path);
     if (runtime_path == NULL) {
-        fprintf(stderr, "peb: cannot find Pebble runtime (pebble_runtime.c)\n"
-                        "     Please ensure Pebble is installed properly or set PEBBLE_RUNTIME_DIR\n");
+        fprintf(stderr, "pbit: cannot find Pebble runtime (pebblebit_runtime.c)\n"
+                        "     Please ensure Pebble is installed properly or set PEBBLEBIT_RUNTIME_DIR\n");
         free(source);
         return 1;
     }
@@ -853,7 +900,7 @@ static int compile_source(const char *source_path, const char *output_path,
     }
 
     if (!remove_output_executable(output_path)) {
-        fprintf(stderr, "peb: cannot remove old output '%s': %s\n",
+        fprintf(stderr, "pbit: cannot remove old output '%s': %s\n",
                 output_path, strerror(errno));
         free(runtime_path);
         source_manager_free(&sm);
@@ -864,23 +911,28 @@ static int compile_source(const char *source_path, const char *output_path,
     parser_init(&parser, source);
     ASTNode *program = parser_parse_program(&parser);
     if (program == NULL) {
-        fprintf(stderr, "peb: parsing failed; executable not produced\n");
+        fprintf(stderr, "pbit: parsing failed; executable not produced\n");
         free(runtime_path);
         source_manager_free(&sm);
         return 1;
     }
 
-    if (!resolve_imports(program, source_path, &sm)) {
-        fprintf(stderr, "peb: import resolution failed; executable not produced\n");
+    char *stdlib_dir = find_stdlib_directory(compiler_path);
+
+    if (!resolve_imports(program, source_path, &sm, stdlib_dir)) {
+        free(stdlib_dir);
+        fprintf(stderr,
+                "pbit: import resolution failed; executable not produced\n");
         free(runtime_path);
         ast_free(program);
         source_manager_free(&sm);
         return 1;
     }
+    free(stdlib_dir);
 
     SemanticContext *semantic = semantic_analyze(program);
     if (semantic == NULL) {
-        fprintf(stderr, "peb: semantic analysis failed; executable not produced\n");
+        fprintf(stderr, "pbit: semantic analysis failed; executable not produced\n");
         free(runtime_path);
         ast_free(program);
         source_manager_free(&sm);
@@ -900,7 +952,7 @@ static int compile_source(const char *source_path, const char *output_path,
     }
 
     if (main_count != 1 || main_function == NULL) {
-        fprintf(stderr, "peb: program must define exactly one function number main()\n");
+        fprintf(stderr, "pbit: program must define exactly one function number main()\n");
         free(runtime_path);
         semantic_free(semantic);
         ast_free(program);
@@ -908,7 +960,7 @@ static int compile_source(const char *source_path, const char *output_path,
         return 1;
     }
     if (main_function->data.function_decl.parameter_count != 0) {
-        fprintf(stderr, "peb: entry point main() must not have parameters\n");
+        fprintf(stderr, "pbit: entry point main() must not have parameters\n");
         free(runtime_path);
         semantic_free(semantic);
         ast_free(program);
@@ -917,7 +969,7 @@ static int compile_source(const char *source_path, const char *output_path,
     }
     if (main_function->data.function_decl.return_type.kind != AST_TYPE_NUMBER ||
         main_function->data.function_decl.return_type.dimension_count != 0) {
-        fprintf(stderr, "peb: entry point must return number\n");
+        fprintf(stderr, "pbit: entry point must return number\n");
         free(runtime_path);
         semantic_free(semantic);
         ast_free(program);
@@ -927,7 +979,7 @@ static int compile_source(const char *source_path, const char *output_path,
 
     Codegen *codegen = codegen_create("pebble_module", semantic);
     if (codegen == NULL) {
-        fprintf(stderr, "peb: could not initialize code generator\n");
+        fprintf(stderr, "pbit: could not initialize code generator\n");
         free(runtime_path);
         semantic_free(semantic);
         ast_free(program);
@@ -964,7 +1016,7 @@ static int compile_source(const char *source_path, const char *output_path,
     /* Do not emit or link partially generated LLVM IR. */
     if (codegen_has_error(codegen)) {
         fprintf(stderr,
-                "peb: code generation failed; executable not produced\n");
+                "pbit: code generation failed; executable not produced\n");
         (void)remove_output_executable(output_path);
         free(runtime_path);
         codegen_free(codegen);
@@ -988,7 +1040,7 @@ static int compile_source(const char *source_path, const char *output_path,
     char *ir_path = malloc(output_len + 4);
     char *wrapper_path = malloc(output_len + 12);
     if (object_path == NULL || ir_path == NULL || wrapper_path == NULL) {
-        fprintf(stderr, "peb: out of memory creating output paths\n");
+        fprintf(stderr, "pbit: out of memory creating output paths\n");
         free(object_path);
         free(ir_path);
         free(wrapper_path);
@@ -1012,10 +1064,10 @@ static int compile_source(const char *source_path, const char *output_path,
             int write_ok = fprintf(wf,
                 "/* Auto-generated Pebble runtime entry-point wrapper. */\n"
                 "#include <stdint.h>\n"
-                "void pebble_runtime_init(int argc, char **argv);\n"
+                "void pebblebit_runtime_init(int argc, char **argv);\n"
                 "int64_t pebble_user_main(void);\n"
                 "int main(int argc, char **argv) {\n"
-                "    pebble_runtime_init(argc, argv);\n"
+                "    pebblebit_runtime_init(argc, argv);\n"
                 "    return (int)pebble_user_main();\n"
                 "}\n") >= 0;
 
@@ -1028,7 +1080,7 @@ static int compile_source(const char *source_path, const char *output_path,
     (void)remove_output_executable(output_path);
     int ok = 1;
     if (!wrapper_ok) {
-        fprintf(stderr, "peb: failed to write main() wrapper\n");
+        fprintf(stderr, "pbit: failed to write main() wrapper\n");
         ok = 0;
     }
     if (ok && keep_ir) {
@@ -1041,7 +1093,7 @@ static int compile_source(const char *source_path, const char *output_path,
     (void)remove(wrapper_path);
     if (!keep_ir) (void)remove(ir_path);
 
-    if (ok) fprintf(stderr, "peb: built %s\n", output_path);
+    if (ok) fprintf(stderr, "pbit: built %s\n", output_path);
     else (void)remove_output_executable(output_path);
 
     free(object_path);
@@ -1051,6 +1103,27 @@ static int compile_source(const char *source_path, const char *output_path,
     ast_free(program);
     source_manager_free(&sm);
     return ok ? 0 : 1;
+}
+
+static int has_supported_source_extension(const char *path)
+{
+    const char *filename = strrchr(path, '/');
+#ifdef _WIN32
+    const char *backslash = strrchr(path, '\\');
+    if (backslash != NULL &&
+        (filename == NULL || backslash > filename)) {
+        filename = backslash;
+    }
+#endif
+
+    filename = filename != NULL ? filename + 1 : path;
+
+    const char *extension = strrchr(filename, '.');
+    if (extension == NULL) {
+        return 0;
+    }
+
+    return strcmp(extension, ".pb") == 0;
 }
 
 int main(int argc, char **argv)
@@ -1083,7 +1156,7 @@ int main(int argc, char **argv)
         strcmp(argv[index], "run") == 0) {
         mode = argv[index++];
         if (index >= argc) {
-            fprintf(stderr, "peb: missing source file\n");
+            fprintf(stderr, "pbit: missing source file\n");
             usage(argv[0], stderr);
             return 2;
         }
@@ -1091,8 +1164,28 @@ int main(int argc, char **argv)
     source = argv[index++];
 
     if (source[0] == '-') {
-        fprintf(stderr, "peb: unknown option '%s'\n", source);
+        fprintf(stderr, "pbit: unknown option '%s'\n", source);
         usage(argv[0], stderr);
+        return 2;
+    }
+
+    if (!has_supported_source_extension(source)) {
+        const char *filename = strrchr(source, '/');
+    #ifdef _WIN32
+        const char *backslash = strrchr(source, '\\');
+        if (backslash != NULL &&
+            (filename == NULL || backslash > filename)) {
+            filename = backslash;
+        }
+    #endif
+
+        filename = filename != NULL ? filename + 1 : source;
+
+        const char *extension = strrchr(filename, '.');
+
+        fprintf(stderr, "pbit: unsupported source file extension '%s'\n",
+                extension != NULL ? extension : "(none)");
+        fprintf(stderr, "     Pebblebit source files must use .pb\n");
         return 2;
     }
 
@@ -1100,18 +1193,18 @@ int main(int argc, char **argv)
         if (strcmp(argv[index], "-o") == 0) {
             if (index + 1 >= argc) {
                 fprintf(stderr,
-                        "peb: option '-o' requires an output path\n");
+                        "pbit: option '-o' requires an output path\n");
                 return 2;
             }
 
             if (output != NULL) {
-                fprintf(stderr, "peb: option '-o' specified more than once\n");
+                fprintf(stderr, "pbit: option '-o' specified more than once\n");
                 return 2;
             }
 
             output = argv[index + 1];
             if (output[0] == '\0') {
-                fprintf(stderr, "peb: output path cannot be empty\n");
+                fprintf(stderr, "pbit: output path cannot be empty\n");
                 return 2;
             }
 
@@ -1119,14 +1212,14 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[index], "--keep-ir") == 0) {
             if (keep_ir) {
                 fprintf(stderr,
-                        "peb: option '--keep-ir' specified more than once\n");
+                        "pbit: option '--keep-ir' specified more than once\n");
                 return 2;
             }
 
             keep_ir = 1;
             ++index;
         } else {
-            fprintf(stderr, "peb: unknown argument '%s'\n", argv[index]);
+            fprintf(stderr, "pbit: unknown argument '%s'\n", argv[index]);
             usage(argv[0], stderr);
             return 2;
         }
@@ -1138,7 +1231,7 @@ int main(int argc, char **argv)
         output = generated_output;
     }
     if (output == NULL || output[0] == '\0') {
-        fprintf(stderr, "peb: invalid output name\n");
+        fprintf(stderr, "pbit: invalid output name\n");
         free(generated_output);
         return 2;
     }
@@ -1160,7 +1253,7 @@ int main(int argc, char **argv)
         run_target = strdup(output);
 #endif
         if (run_target == NULL) {
-            fprintf(stderr, "peb: out of memory preparing executable path\n");
+            fprintf(stderr, "pbit: out of memory preparing executable path\n");
             free(generated_output);
             return 1;
         }

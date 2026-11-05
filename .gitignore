@@ -1,0 +1,58 @@
+cat > .gitignore <<'EOF'
+# Compiler binaries
+/pbit
+/pbit.exe
+/peb.exe
+
+# Native build artifacts
+*.o
+*.obj
+*.ll
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+
+# Build and release output
+/build/
+/dist/
+
+# Compiler and test binaries
+/pbit-codegen-test
+/pebblebit-lexer-test
+/pebblebit-parser-test
+/pebblebit-semantic-test
+/integration-test
+
+# Generated test output
+/semantic-bounds-test.log
+/pebble_test_io_driver.txt
+/tests/programs/test_stdlib_io
+/tests/programs/test_stdlib_string
+/tests/programs/test_stdlib_system
+
+# Local scratch programs and executables
+/allocator_test
+/allocator_test.pb
+/bad_arg_count.pb
+/bad_arg_type.pb
+/function_test
+/function_test.pb
+/hello
+/hello.pb
+/hello.txt
+/main
+/main.pb
+/string_test
+/string_test.pb
+/test
+/zero_arg
+/zero_arg.pb
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+*.swp
+*~
+EOF

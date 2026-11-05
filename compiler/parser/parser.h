@@ -1,5 +1,5 @@
-#ifndef PEBBLE_PARSER_H
-#define PEBBLE_PARSER_H
+#ifndef PEBBLEBIT_PARSER_H
+#define PEBBLEBIT_PARSER_H
 
 #include "../ast/ast.h"
 #include "../lexer/lexer.h"
@@ -18,4 +18,4 @@ ASTNode *parser_parse_expression(Parser *parser);
 ASTNode *parser_parse_statement(Parser *parser);
 ASTNode *parser_parse_program(Parser *parser);
 
-#endif /* PEBBLE_PARSER_H */
+#endif /* PEBBLEBIT_PARSER_H */

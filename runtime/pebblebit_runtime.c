@@ -1,4 +1,4 @@
-#include "pebble_runtime.h"
+#include "pebblebit_runtime.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -41,7 +41,7 @@ void pebble_free(void *pointer)
  * Pebble string ABI
  *
  * The Pebble compiler emits strings as LLVM struct { i64, ptr } (length
- * first, then pointer). PebbleString is defined in pebble_runtime.h.
+ * first, then pointer). PebbleString is defined in pebblebit_runtime.h.
  * ========================================================================= */
 
 /* Helper: allocate a new PebbleString from a C nul-terminated string. */
@@ -489,16 +489,16 @@ void pebble_time_sleep(int64_t ms)
  * random module
  * ========================================================================= */
 
-void pebble_random_seed(int64_t n)
+void pebblebit_random_seed(int64_t n)
 {
     srand((unsigned int)n);
 }
 
 /*
- * pebble_random_int(min, max) -> number
+ * pebblebit_random_int(min, max) -> number
  * Returns a random integer in [min, max] (inclusive).
  */
-int64_t pebble_random_int(int64_t min_val, int64_t max_val)
+int64_t pebblebit_random_int(int64_t min_val, int64_t max_val)
 {
     if (min_val > max_val) {
         int64_t tmp = min_val;
@@ -516,7 +516,7 @@ int64_t pebble_random_int(int64_t min_val, int64_t max_val)
 static int    g_argc = 0;
 static char **g_argv = NULL;
 
-void pebble_runtime_init(int argc, char **argv)
+void pebblebit_runtime_init(int argc, char **argv)
 {
     g_argc = argc;
     g_argv = argv;

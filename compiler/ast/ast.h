@@ -1,5 +1,5 @@
-#ifndef PEBBLE_AST_H
-#define PEBBLE_AST_H
+#ifndef PEBBLEBIT_AST_H
+#define PEBBLEBIT_AST_H
 
 #include <stddef.h>
 
@@ -419,4 +419,4 @@ void ast_free(ASTNode *node);
 
 void ast_print(const ASTNode *node, int indent);
 
-#endif /* PEBBLE_AST_H */
+#endif /* PEBBLEBIT_AST_H */

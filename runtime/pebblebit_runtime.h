@@ -1,5 +1,5 @@
-#ifndef PEBBLE_RUNTIME_H
-#define PEBBLE_RUNTIME_H
+#ifndef PEBBLEBIT_RUNTIME_H
+#define PEBBLEBIT_RUNTIME_H
 
 #include <stdint.h>
 
@@ -77,11 +77,11 @@ int64_t pebble_time_now(void);
 void pebble_time_sleep(int64_t ms);
 
 /* Random module support */
-void pebble_random_seed(int64_t n);
-int64_t pebble_random_int(int64_t min_val, int64_t max_val);
+void pebblebit_random_seed(int64_t n);
+int64_t pebblebit_random_int(int64_t min_val, int64_t max_val);
 
 /* System module support */
-void pebble_runtime_init(int argc, char **argv);
+void pebblebit_runtime_init(int argc, char **argv);
 int64_t pebble_system_args_count(void);
 void pebble_system_args_get(PebbleString *result, int64_t i);
 

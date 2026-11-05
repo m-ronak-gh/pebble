@@ -1,5 +1,5 @@
-#ifndef PEBBLE_CODEGEN_H
-#define PEBBLE_CODEGEN_H
+#ifndef PEBBLEBIT_CODEGEN_H
+#define PEBBLEBIT_CODEGEN_H
 
 #include <stddef.h>
 
@@ -91,4 +91,4 @@ void codegen_function(
     ASTNode *function
 );
 
-#endif /* PEBBLE_CODEGEN_H */
+#endif /* PEBBLEBIT_CODEGEN_H */

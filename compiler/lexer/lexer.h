@@ -1,5 +1,5 @@
-#ifndef PEBBLE_LEXER_H
-#define PEBBLE_LEXER_H
+#ifndef PEBBLEBIT_LEXER_H
+#define PEBBLEBIT_LEXER_H
 
 #include <stddef.h>
 
@@ -111,4 +111,4 @@ void lexer_init(Lexer *lexer, const char *source);
 
 Token lexer_next_token(Lexer *lexer);
 
-#endif /* PEBBLE_LEXER_H */
+#endif /* PEBBLEBIT_LEXER_H */

@@ -11,7 +11,7 @@ LLVM_LIBS = $(shell llvm-config --libs core analysis native)
 CFLAGS += $(LLVM_CFLAGS)
 LDFLAGS = $(LLVM_LDFLAGS) $(LLVM_LIBS)
 
-PEBBLE = peb
+PBIT = pbit
 DRIVER_SOURCES = \
     compiler/main.c \
     compiler/codegen/codegen.c \
@@ -20,8 +20,7 @@ DRIVER_SOURCES = \
     compiler/ast/ast.c \
     compiler/lexer/lexer.c
 
-SMOKE = pebble-smoke
-CODEGEN_TEST_BIN = pebble-codegen-test
+CODEGEN_TEST_BIN = pbit-codegen-test
 CODEGEN_IR = integration-test.ll
 CODEGEN_EXE = integration-test
 EXPECTED_EXIT = 33
@@ -34,14 +33,15 @@ CODEGEN_SOURCES = \
     compiler/ast/ast.c \
     compiler/lexer/lexer.c
 
-.PHONY: all peb smoke codegen-test verify native-test test clean multidim-test bounds-test primitive-array-tests driver-test
-all: peb
+.PHONY: all codegen-test verify native-test test clean \
+        multidim-test bounds-test primitive-array-tests \
+        semantic-bounds-test lexer-test parser-test semantic-test \
+        unit-tests driver-test package install uninstall
 
-peb: $(DRIVER_SOURCES)
-	$(CC) $(CFLAGS) $(DRIVER_SOURCES) $(LDFLAGS) -o $(PEBBLE)
+all: pbit
 
-smoke:
-	$(CC) $(CFLAGS) compiler/codegen/smoke.c $(LDFLAGS) -o $(SMOKE)
+pbit: $(DRIVER_SOURCES)
+	$(CC) $(CFLAGS) $(DRIVER_SOURCES) $(LDFLAGS) -o $(PBIT)
 
 $(CODEGEN_TEST_BIN): $(CODEGEN_SOURCES)
 	$(CC) $(CFLAGS) $(CODEGEN_SOURCES) $(LDFLAGS) -o $(CODEGEN_TEST_BIN)
@@ -121,9 +121,9 @@ semantic-bounds-test: $(CODEGEN_TEST_BIN)
 	done; \
 	rm -f semantic-bounds-test.log
 
-LEXER_TEST_BIN = pebble-lexer-test
-PARSER_TEST_BIN = pebble-parser-test
-SEMANTIC_TEST_BIN = pebble-semantic-test
+LEXER_TEST_BIN = pebblebit-lexer-test
+PARSER_TEST_BIN = pebblebit-parser-test
+SEMANTIC_TEST_BIN = pebblebit-semantic-test
 
 lexer-test:
 	$(CC) $(CFLAGS) compiler/lexer/lexer.c compiler/lexer/lexer_test.c -o $(LEXER_TEST_BIN)
@@ -142,36 +142,38 @@ semantic-test:
 
 unit-tests: lexer-test parser-test semantic-test
 
-test: unit-tests smoke native-test driver-test
-
-driver-test: peb
-	bash ./tests/driver_test.sh ./peb
+test: unit-tests native-test primitive-array-tests multidim-test bounds-test semantic-bounds-test driver-test
+driver-test: pbit
+	bash ./tests/driver_test.sh ./pbit
 
 PLATFORM ?= $(shell uname -s | tr '[:upper:]' '[:lower:]')-$(shell uname -m)
-DIST_DIR = dist/pebble-$(PLATFORM)
+DIST_DIR = dist/pebblebit-$(PLATFORM)
 PREFIX ?= /usr/local
 
-package: peb
-	rm -rf $(DIST_DIR) dist/pebble-$(PLATFORM).tar.gz
-	mkdir -p $(DIST_DIR)/bin $(DIST_DIR)/runtime
-	cp $(PEBBLE) $(DIST_DIR)/bin/
-	cp runtime/pebble_runtime.c runtime/pebble_runtime.h $(DIST_DIR)/runtime/
-	cp README.md pebble-language-spec.md $(DIST_DIR)/
-	tar -czf dist/pebble-$(PLATFORM).tar.gz -C dist pebble-$(PLATFORM)
-	@echo "Package created: dist/pebble-$(PLATFORM).tar.gz"
+package: pbit
+	rm -rf $(DIST_DIR) dist/pebblebit-$(PLATFORM).tar.gz
+	mkdir -p $(DIST_DIR)/bin $(DIST_DIR)/runtime $(DIST_DIR)/lib/pebblebit
+	cp $(PBIT) $(DIST_DIR)/bin/
+	cp runtime/pebblebit_runtime.c runtime/pebblebit_runtime.h $(DIST_DIR)/runtime/
+	cp -R stdlib $(DIST_DIR)/lib/pebblebit/std
+	cp README.md pebblebit-language-spec.md $(DIST_DIR)/
+	tar -czf dist/pebblebit-$(PLATFORM).tar.gz -C dist pebblebit-$(PLATFORM)
+	@echo "Package created: dist/pebblebit-$(PLATFORM).tar.gz"
 
-install: peb
+install: pbit
 	install -d $(DESTDIR)$(PREFIX)/bin
-	install -m 755 $(PEBBLE) $(DESTDIR)$(PREFIX)/bin/
-	install -d $(DESTDIR)$(PREFIX)/lib/pebble
-	install -m 644 runtime/pebble_runtime.c runtime/pebble_runtime.h $(DESTDIR)$(PREFIX)/lib/pebble/
+	install -m 755 $(PBIT) $(DESTDIR)$(PREFIX)/bin/
+	install -d $(DESTDIR)$(PREFIX)/lib/pebblebit
+	install -m 644 runtime/pebblebit_runtime.c runtime/pebblebit_runtime.h $(DESTDIR)$(PREFIX)/lib/pebblebit/
+	install -d $(DESTDIR)$(PREFIX)/lib/pebblebit/std
+	install -m 644 stdlib/*.pb $(DESTDIR)$(PREFIX)/lib/pebblebit/std/
 
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/bin/$(PEBBLE)
-	rm -rf $(DESTDIR)$(PREFIX)/lib/pebble
+	rm -f $(DESTDIR)$(PREFIX)/bin/$(PBIT)
+	rm -rf $(DESTDIR)$(PREFIX)/lib/pebblebit
 
 clean:
-	rm -rf $(PEBBLE) $(SMOKE) pebble-smoke.o pebble-smoke-native \
+	rm -rf $(PBIT) \
 		$(CODEGEN_TEST_BIN) $(CODEGEN_IR) $(CODEGEN_EXE) \
 		$(LEXER_TEST_BIN) $(PARSER_TEST_BIN) $(SEMANTIC_TEST_BIN) \
 		dist
