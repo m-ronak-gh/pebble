@@ -307,6 +307,8 @@ static char *resolve_canonical_path(const char *path)
 #endif
 }
 
+static int has_supported_source_extension(const char *path);
+
 static int resolve_imports(
     ASTNode *program,
     const char *current_file_path,
@@ -343,7 +345,11 @@ static int resolve_imports(
             return 0;
         }
 
-        if (joined == NULL) {
+        if (!has_supported_source_extension(joined)) {
+            fprintf(stderr,
+                    "pbit: imported source file '%s' must use .pb\n",
+                    joined);
+            free(joined);
             free(dir);
             return 0;
         }
@@ -1185,7 +1191,7 @@ int main(int argc, char **argv)
 
         fprintf(stderr, "pbit: unsupported source file extension '%s'\n",
                 extension != NULL ? extension : "(none)");
-        fprintf(stderr, "     Pebblebit source files must use .pb\n");
+        fprintf(stderr, "     PebbleBit source files must use .pb\n");
         return 2;
     }
 

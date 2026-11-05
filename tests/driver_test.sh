@@ -1359,16 +1359,34 @@ else
     cat "$TMP_DIR/log"
 fi
 
-# Test: reject .txt source extension
-cp "$TMP_DIR/basic.pb" "$TMP_DIR/invalid.txt"
+# Test: reject .peb source extension
+cp "$TMP_DIR/basic.pb" "$TMP_DIR/invalid.peb"
 
-if "$COMPILER" build "$TMP_DIR/invalid.txt" \
+if "$COMPILER" build "$TMP_DIR/invalid.peb" \
     >"$TMP_DIR/log" 2>&1; then
-    fail "reject .txt source extension"
-elif grep -q "unsupported source file extension '.txt'" "$TMP_DIR/log"; then
-    pass "reject .txt source extension"
+    fail "reject .peb source extension"
+elif grep -q "unsupported source file extension '.peb'" "$TMP_DIR/log"; then
+    pass "reject .peb source extension"
 else
-    fail "clear diagnostic for .txt source extension"
+    fail "clear diagnostic for .peb source extension"
+    cat "$TMP_DIR/log"
+fi
+
+# Test: reject .peb imported source extension
+: > "$TMP_DIR/legacy.peb"
+
+{
+    printf 'import "legacy.peb";\n'
+    cat "$TMP_DIR/basic.pb"
+} > "$TMP_DIR/import_legacy_peb.pb"
+
+if "$COMPILER" build "$TMP_DIR/import_legacy_peb.pb" \
+    >"$TMP_DIR/log" 2>&1; then
+    fail "reject .peb imported source"
+elif grep -q "imported source file .*legacy.peb.*must use .pb" "$TMP_DIR/log"; then
+    pass "reject .peb imported source"
+else
+    fail "clear diagnostic for .peb imported source"
     cat "$TMP_DIR/log"
 fi
 

@@ -1,12 +1,12 @@
 # PebbleBit
 
-Pebblebit is a small, statically typed programming language designed for teaching compiler construction and systems programming. It compiles directly to native executables using LLVM.
+PebbleBit is a small, statically typed programming language designed for teaching compiler construction and systems programming. It compiles directly to native executables using LLVM.
 
 ---
 
 ## Supported Platforms
 
-Pebblebit compiles to native binaries on:
+PebbleBit compiles to native binaries on:
 
 1. **Linux** (x86_64, aarch64) — ELF binaries linked via `cc`/`clang`.
 2. **macOS** (Apple Silicon arm64, Intel x86_64) — Mach-O binaries linked via Apple `clang`.
@@ -16,7 +16,7 @@ Pebblebit compiles to native binaries on:
 
 ## Toolchain & Dependencies
 
-Pebblebit relies on LLVM for code generation and a host C compiler/linker to produce final executables.
+PebbleBit relies on LLVM for code generation and a host C compiler/linker to produce final executables.
 
 - **LLVM Version:** LLVM 18 (recommended: 18.1.x; compatible with LLVM 16+ via LLVM C API).
   - Tools needed: `llvm-config`, `opt`, `clang`.
@@ -52,7 +52,7 @@ pacman -S mingw-w64-clang-x86_64-clang \
 
 ---
 
-## Building Pebblebit from Source
+## Building PebbleBit from Source
 
 Clone the repository and build using GNU Make:
 
@@ -89,9 +89,9 @@ sudo make install
 
 ## Usage Guide
 
-### Compiling a Pebblebit Program (`build`)
+### Compiling a PebbleBit Program (`build`)
 
-To compile a Pebblebit program into a native executable:
+To compile a PebbleBit program into a native executable:
 
 ```bash
 pbit build main.pb
@@ -121,7 +121,7 @@ This compiles the program and executes it immediately, returning the program's e
 
 ## Modules and Imports
 
-Pebblebit supports multi-file programs via relative imports:
+PebbleBit supports multi-file programs via relative imports:
 
 ```pebblebit
 import "math_helper.pb";
@@ -138,7 +138,7 @@ Imports are resolved relative to the directory of the file containing the `impor
 
 ## Runtime Resource Discovery
 
-The Pebblebit compiler (`pbit`) locates its C runtime (`pebblebit_runtime.c` and `pebblebit_runtime.h`) automatically, completely independent of the user's current working directory:
+The PebbleBit compiler (`pbit`) locates its C runtime (`pebblebit_runtime.c` and `pebblebit_runtime.h`) automatically, completely independent of the user's current working directory:
 
 1. **Environment Variable Override:** If `PEBBLEBIT_RUNTIME_PATH` or `PEBBLEBIT_RUNTIME_DIR` is set, the specified path/directory is checked first.
 2. **Compiler Binary Directory:** The compiler discovers its own executable location and checks:
